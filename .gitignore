@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.ipynb_checkpoints/
+data/sample_photos/*
+data/sample_video/*
+data/sample_lidar/*
+!data/sample_photos/.gitkeep
+!data/sample_video/.gitkeep
+!data/sample_lidar/.gitkeep
+.DS_Store
