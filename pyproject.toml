@@ -1,0 +1,23 @@
+[project]
+name = "floorplan-takehome"
+version = "0.1.0"
+description = "Dimensioned floor plans from phone camera captures"
+authors = [
+    { name = "Chiranjeet Mishra", email = "chiranjeetmishra13@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "open3d>=0.20.0",
+    "opencv-python>=5.0.0.93",
+    "scipy>=1.18.1",
+    "trimesh>=5.1.0",
+]
+
+[project.scripts]
+floorplan-takehome = "floorplan_takehome:main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"

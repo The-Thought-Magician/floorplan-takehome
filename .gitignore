@@ -7,7 +7,8 @@ venv/
 data/sample_photos/*
 data/sample_video/*
 data/sample_lidar/*
-!data/sample_photos/.gitkeep
-!data/sample_video/.gitkeep
-!data/sample_lidar/.gitkeep
 .DS_Store
+
+CLAUDE.md
+CLAUDE.local.md
+.claude/
