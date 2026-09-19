@@ -61,6 +61,19 @@ LiDAR on Apple Pro devices, ARCore Depth API on most Android devices. Non-Pro
 iPhones are the one real gap, no on-device metric depth exists there, capture
 from those falls through to the tier 1/2 feed-forward pipeline instead.
 
+Capture path on Android needs no installed app. Chrome's WebXR Depth Sensing
+module ships (not experimental) ARCore's Depth API directly to a website via
+`navigator.xr.requestSession()`, no native app to build or ask the customer to
+install. Google Play Services for AR, the ARCore runtime itself, auto-installs
+in the background the first time it is needed, the user never has to find or
+install it manually. No off-the-shelf third-party app does real ARCore depth
+capture in a usable form either (checked: the closest comparable app,
+SiteScape, is LiDAR-only and explicitly does not support Android), so a
+browser-based capture page is both the least-friction and the only realistic
+path, not a corner cut for lack of a better option. iOS has no equivalent for
+LiDAR in Safari's WebXR support as of this research, native app or a hybrid
+wrapper is still needed there.
+
 Input: ARKit `ARMeshAnchor` scene mesh or raw `sceneDepth` plus camera poses,
 or ARCore's per-frame depth image plus tracked pose. Both give real-world
 metric scale directly, no scale ambiguity.
@@ -102,11 +115,23 @@ optimization loop at all:
   pretrained checkpoint, has a hosted demo (`facebook/vggt` on Hugging Face
   Spaces).
 - **MASt3R** (Naver): pairwise dense point-map regression plus a matching head,
-  extends DUSt3R with metric-scale recovery. Metric scale out of the box.
+  extends DUSt3R with metric-scale recovery. Metric scale out of the box, but
+  a real reported number puts it at 11.8GB for 19 images on an RTX 3080, a
+  confirmed no-go on 8GB at any useful image count, not just an unverified
+  paper figure this time.
 - **MapAnything** (Meta, 2025): unified feed-forward model, explicitly built
   for metric 3D reconstruction, optionally takes known calibration/poses/depth
   as extra input if available and folds it in. Apache 2.0, weights on Hugging
-  Face (`facebook/map-anything-v1`).
+  Face (`facebook/map-anything-v1`). No consumer VRAM number in its own README
+  at all, only a 2000-views-on-140GB memory-efficient-mode figure, no way to
+  extrapolate to 8GB from that.
+- **MUSt3R** (Naver, CVPR 2025, DUSt3R successor): 5x lighter and an order of
+  magnitude faster than DUSt3R at similar accuracy. A 2025 survey benchmarks
+  MUSt3R-224 at 4.1GB and MUSt3R-512 at 8.1GB, real headroom under 8GB rather
+  than borderline, though still an A100 figure, not a confirmed consumer-card
+  number. Pip-installable, pretrained checkpoints included. Scale: not stated
+  as metric anywhere found, same lineage as DUSt3R/VGGT, assume relative and
+  pair with a DepthPro anchor unless proven otherwise.
 - **Fast3R** (Meta, CVPR 2025): all-images-at-once generalization of DUSt3R,
   scales to 1000+ images, very fast, relative scale.
 
@@ -119,22 +144,26 @@ COLMAP-based design: COLMAP fails outright when two photos of the same room
 do not share enough matched features, feed-forward models degrade gracefully
 instead because they never depend on explicit pairwise matches.
 
-Plan: use MapAnything (metric output, actively maintained, explicit case for
-this exact problem) as the primary reconstruction backend for both the photo
-and video tiers. Video frames are just a densely sampled, ordered image set to
-this class of model, so one backend covers both tiers, the only difference is
-frame extraction (fixed interval sampling with a parallax check for video)
-versus using photos directly.
+Plan: use MUSt3R-224 (confirmed real headroom under 8GB) or `vggt-low-vram`
+as the default reconstruction backend for both the photo and video tiers on
+the local 8GB card. MapAnything and MASt3R are named because they are the
+strongest metric-scale candidates on paper, but neither has real 8GB evidence
+and MASt3R now has a directly disconfirming one, so they are a fallback to
+test only if the 8GB-confirmed options come up short on accuracy, not the
+first thing to reach for. Video frames are just a densely sampled, ordered
+image set to this class of model, so one backend covers both tiers, the only
+difference is frame extraction (fixed interval sampling with a parallax check
+for video) versus using photos directly.
 
-Scale: MapAnything and MASt3R claim metric output directly. Treat that as
-unverified until checked against a tape-measure ground truth (the papers'
-benchmarks are not room-reconstruction-specific). If metric output drifts,
-fall back to a metric depth anchor: run a single-image metric depth model
-(Apple **DepthPro**, or **UniDepth**, or **Metric3D v2**, all give true-scale
-depth from one frame with no calibration needed) on one reference frame and
-rescale the point cloud to match. This is a cleaner scale fix than the old
-IMU-fusion/known-object approach: it needs no capture-time cooperation from
-the user and no assumption about what is in frame.
+Scale: none of the 8GB-confirmed options (MUSt3R, VGGT) are metric out of the
+box, both are relative-scale by lineage. Fix with a metric depth anchor: run a
+single-image metric depth model (Apple **DepthPro**, or **UniDepth**, or
+**Metric3D v2**, all give true-scale depth from one frame with no calibration
+needed) on one reference frame and rescale the point cloud to match. This is a
+cleaner scale fix than the old IMU-fusion/known-object approach: it needs no
+capture-time cooperation from the user and no assumption about what is in
+frame. If MapAnything or MASt3R get tested later and their metric claim holds
+up, the DepthPro anchor step can be dropped for those paths.
 
 Once a point cloud and poses exist, from either tier, the plane-fitting and
 polygon-extraction step is shared with the LiDAR tier below. Also worth
@@ -144,16 +173,18 @@ specifically to fix the corner/angle/self-intersection errors that hand-rolled
 RANSAC plane intersection produces. Start with the RANSAC-based extractor
 since it is faster to get working, treat PolyRoom as the upgrade path.
 
-Multi-room stitching ("stitched" floor plans): VGGT/MapAnything handle this
-natively for a single continuous capture since all frames go through one
+Multi-room stitching ("stitched" floor plans): this whole model class handles
+it natively for a single continuous capture since all frames go through one
 forward pass into one shared point cloud, no separate loop-closure step
 needed the way classic SLAM requires it.
 
-Libraries: `map-anything` (pip-installable, Hugging Face checkpoint), OpenCV
-for frame extraction and any lightweight preprocessing, Open3D for plane
-fitting on the resulting point cloud. COLMAP is not required for the default
-path, keep it noted as a fallback only if a feed-forward model checkpoint
-fails to load or is unavailable in the actual take-home environment.
+Libraries: `must3r` (pip-installable, pretrained checkpoints) and
+`harry7557558/vggt-low-vram` as the primary 8GB-viable options, `map-anything`
+kept installed as the metric-scale fallback to test. OpenCV for frame
+extraction and any lightweight preprocessing, Open3D for plane fitting on the
+resulting point cloud. COLMAP is not required for the default path, keep it
+noted as a fallback only if every feed-forward option fails to load or is
+unavailable in the actual take-home environment.
 
 ## Scale strategy summary
 
@@ -161,8 +192,8 @@ fails to load or is unavailable in the actual take-home environment.
 |---|---|
 | LiDAR (Apple Pro) | ARKit metric depth, exact |
 | depth-from-motion (Android) | ARCore VIO-fused metric depth, verify accuracy |
-| video | MapAnything/MASt3R metric output, verify against a DepthPro anchor |
-| photos | MapAnything/MASt3R metric output, verify against a DepthPro anchor |
+| video | MUSt3R/VGGT relative output, fixed with a DepthPro anchor |
+| photos | MUSt3R/VGGT relative output, fixed with a DepthPro anchor |
 
 ## Architecture
 
@@ -188,15 +219,19 @@ one-off reconstruction, not just a picture of a floor plan.
 
 ## Build vs buy
 
-- LiDAR tier: consider Apple `RoomPlan` as the primary path for iOS capture apps.
-  Confirmed accuracy from real measurement studies: 1-3cm, explicitly not
-  sufficient for permit-grade drawings. Keep a custom Open3D pipeline as the
-  fallback for raw point cloud exports and for cases needing confidence scoring
-  or multi-tier fusion RoomPlan does not expose.
-- Video and photo tiers: MapAnything (or VGGT plus a DepthPro metric anchor) as
-  the reconstruction core, a pretrained checkpoint, not a from-scratch model and
-  not a from-scratch SfM pipeline. Custom code sits around it for frame
-  sampling, scale verification, plane extraction, and schema conversion.
+- LiDAR tier: a custom Open3D pipeline, not `RoomPlan`, since RoomPlan is
+  iOS-only and this project needs one pipeline covering both ARKit LiDAR and
+  ARCore depth-from-motion. RoomPlan's confirmed accuracy (1-3cm, from real
+  measurement studies, explicitly not sufficient for permit-grade drawings) is
+  still a useful reference target even though it is not being used directly.
+- Android capture: browser-based, WebXR Depth Sensing in Chrome, not a native
+  app. No install friction, no separate SDK integration to maintain.
+- Video and photo tiers: MUSt3R or `vggt-low-vram` as the reconstruction core
+  on the local 8GB card, a pretrained checkpoint, not a from-scratch model and
+  not a from-scratch SfM pipeline. MapAnything/MASt3R as a metric-scale
+  fallback to test, not the default, given the VRAM findings above. Custom
+  code sits around whichever backend for frame sampling, scale verification,
+  plane extraction, and schema conversion.
 - Plane segmentation and point cloud utilities: Open3D throughout, do not hand-roll.
 - Polygon extraction: start with RANSAC plane intersection in Open3D, PolyRoom
   as a later upgrade if time allows and the hand-rolled version is producing
@@ -211,9 +246,10 @@ one-off reconstruction, not just a picture of a floor plan.
   fixed and should be evaluated separately with that caveat stated.
 - Track failure rate, not just accuracy on captures that succeeded: report what
   fraction of test captures produce no usable output at all.
-- The metric-scale claims for MapAnything/MASt3R are from the papers' general
-  benchmarks, not room-reconstruction-specific. Verify directly rather than
-  trusting the claim, this is the single most important thing to check early.
+- Whichever scale path is used (DepthPro anchor by default, or MapAnything's
+  native metric claim if it gets tested), verify directly against a tape
+  measure rather than trusting a paper's general benchmark. This is the single
+  most important thing to check early.
 
 ## Risks and edge cases
 
@@ -228,14 +264,16 @@ one-off reconstruction, not just a picture of a floor plan.
 - GPU memory: the paper figures for VGGT (5.6GB at 20 views) do not hold up in
   practice. Real user reports on the official repo show OOM on an 8GB RTX 4070
   with 6 images, and even OOM on a 24GB RTX 4090 with 10 images, far past the
-  paper's claim. Do not trust the paper's VRAM numbers, test directly on the
-  actual card. A community fork, `harry7557558/vggt-low-vram`, exists
-  specifically for this problem (attention-output memory reduction, explicit
-  fp16/bf16, `torch.cuda.empty_cache()`, `torch.compile`) and claims 150 images
-  on 8GB. Use that fork as the 8GB path rather than stock VGGT. No public 8GB
-  data point exists for MapAnything or MASt3R, treat that as unverified and
-  profile it directly before relying on it (MapAnything ships a
-  `scripts/profile_memory_runtime.py` for exactly this).
+  paper's claim. Do not trust paper VRAM numbers, test directly on the actual
+  card. Use `harry7557558/vggt-low-vram` (claims 150 images on 8GB) rather than
+  stock VGGT, or MUSt3R-224 (a real benchmark puts it at 4.1GB, more headroom
+  than VGGT's own figures). MASt3R has a confirmed disconfirming number,
+  11.8GB for 19 images on an RTX 3080, treat 8GB as a real no-go for it, not
+  just unverified. MapAnything's README gives no consumer VRAM number at all
+  (only a 2000-views-on-140GB figure), still fully unverified at 8GB, profile
+  it directly before relying on it (it ships
+  `scripts/profile_memory_runtime.py` for exactly this) rather than assuming
+  either way.
 - If 8GB genuinely cannot fit the target image count even with the low-VRAM
   fork, fall back to a rented cloud GPU for that run, or reduce input
   resolution and image count and accept a lower-confidence reconstruction.
@@ -251,17 +289,17 @@ this a day of integration work, not a multi-month research project.
    real data.
 2. LiDAR tier next: direct metric depth, fastest path to a working end-to-end
    demo, and a correctness reference for the other two tiers.
-3. Photo and video tiers together, same backend: run on the local 8GB card
-   first, MapAnything if it profiles clean at the target image count,
-   `vggt-low-vram` if not (stock VGGT is not reliable at 8GB per real user
-   reports, do not use it directly). Confirm point cloud and pose output, then
-   reuse the tier-3 plane/polygon extractor on the result. Verify metric-scale
-   claims immediately against the LiDAR/ARCore tier or a tape measure, do not
-   assume the papers' numbers hold for this use case. Fall back to a rented
-   cloud GPU only if the local card cannot fit a usable image count even with
-   the low-VRAM path.
-4. If MapAnything's metric output is off, add the DepthPro single-frame anchor
-   and rescale.
+3. Photo and video tiers together, same backend: run `vggt-low-vram` or
+   MUSt3R-224 on the local 8GB card first, both have real evidence of fitting
+   (stock VGGT and MASt3R do not, do not use either directly at 8GB). Confirm
+   point cloud and pose output, then reuse the tier-3 plane/polygon extractor
+   on the result. Fall back to a rented cloud GPU only if the local card
+   cannot fit a usable image count even with these options, or if MapAnything
+   needs testing for its metric-scale claim.
+4. Add the DepthPro single-frame anchor and rescale, since neither
+   `vggt-low-vram` nor MUSt3R is metric out of the box. Verify the rescaled
+   result against the LiDAR/ARCore tier or a tape measure immediately, do not
+   assume any paper's numbers hold for this use case.
 5. A CLI or simple script wrapping the pipeline is enough; a UI is out of scope
    unless explicitly asked for.
 6. If time remains: PolyRoom-based polygon extraction as an upgrade over the
