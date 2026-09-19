@@ -74,6 +74,18 @@ path, not a corner cut for lack of a better option. iOS has no equivalent for
 LiDAR in Safari's WebXR support as of this research, native app or a hybrid
 wrapper is still needed there.
 
+Tested directly on a real Android phone in Chrome: the immersive-ar session
+itself starts fine, confirming ARCore and WebXR both work on-device. The
+official `immersive-web/webxr-samples` depth demos (both the CPU and GPU
+variants, `proposals/phone-ar-depth.html` and `phone-ar-depth-gpu.html`) fail
+with a shader compile error, GLSL ES 3.00 syntax (`in`/`out`, `texture()`) in
+a context created as WebGL1. Same failure in both, so it is a bug in those
+samples' context setup, not a device or ARCore limitation. Our own capture
+page needs an explicit `canvas.getContext('webgl2', { xrCompatible: true })`,
+or better, skip rendering entirely and read `XRCPUDepthInformation` values
+directly in JS, since capture only needs the raw depth data, not a live
+visualization.
+
 Input: ARKit `ARMeshAnchor` scene mesh or raw `sceneDepth` plus camera poses,
 or ARCore's per-frame depth image plus tracked pose. Both give real-world
 metric scale directly, no scale ambiguity.
