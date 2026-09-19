@@ -273,6 +273,21 @@ one-off reconstruction, not just a picture of a floor plan.
 - Moving furniture or people during capture: violates the static-scene
   assumption every one of these methods depends on, feed-forward models
   included.
+- Static furniture occluding walls: confirmed on a real capture, not just
+  theoretical. A furnished room (bed, wardrobe, table between the camera and
+  a wall) reliably yields a confident plane for the wall(s) the camera had a
+  clear line of sight to, but only a weak, single-sided candidate for a wall
+  mostly blocked by furniture, never both sides of that direction. RANSAC on
+  raw geometry has no way to infer an occluded wall's position, it needs
+  enough real unoccluded points. wall_polygon correctly refuses to close a
+  polygon rather than guess when this happens, which is the right behavior,
+  but it means a naive plane-fitting pipeline will fail closure in any
+  realistically furnished room, not just adversarial edge cases. Real
+  production systems handle this with a trained prior (this is exactly why
+  RoomFormer/PolyRoom exist, noted earlier, rather than pure RANSAC), or by
+  requiring the capture to walk close enough to every wall to get a clear
+  view past furniture. Worth deciding explicitly which of these two paths to
+  take before assuming plane-fitting alone is sufficient.
 - GPU memory: the paper figures for VGGT (5.6GB at 20 views) do not hold up in
   practice. Real user reports on the official repo show OOM on an 8GB RTX 4070
   with 6 images, and even OOM on a 24GB RTX 4090 with 10 images, far past the
