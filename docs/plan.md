@@ -60,53 +60,81 @@ building it ourselves is control over the intermediate point cloud (needed if we
 ever want confidence scores, custom room labels, or multi-tier fusion) plus not
 being locked into iOS-only capture apps.
 
-## Tier 2: Video
+## Tier 2: Video, and Tier 1: Photos
 
-No direct depth, but many overlapping frames.
+Classic SfM (COLMAP: feature matching, essential matrix, incremental
+reconstruction, bundle adjustment) is the textbook approach here, but it is not
+the current state of the art and not the right default for a fast build. As of
+2024-2025 there is a class of feed-forward transformer models that take
+unordered, unposed images or video frames and directly regress a point cloud
+plus camera poses in a single forward pass, no matching or iterative
+optimization loop at all:
 
-Approach: visual SLAM / structure-from-motion over the frame sequence.
-- Extract frames at a fixed interval, keep ones with enough parallax.
-- Feature detection and matching across consecutive frames (ORB or SIFT).
-- Estimate relative camera poses (essential matrix, RANSAC), chain into a
-  trajectory, then triangulate 3D points from matched features.
-- Bundle adjustment to reduce drift across the whole trajectory.
-- Loop closure if the walkthrough returns to a previously seen area (needed for
-  "stitched" multi-room plans).
-- Fixing scale: monocular SLAM only gives structure up to an unknown scale factor.
-  Options: use phone IMU (visual-inertial odometry, most video capture apps already
-  fuse this), ask for one reference measurement (a door is close to 80cm, a person's
-  height), or detect a known-size object in frame.
-- Once a scaled point cloud exists, the plane-fitting and polygon-extraction steps
-  from the LiDAR tier apply unchanged.
+- **VGGT** (Meta, CVPR 2025): 1 to ~200 unordered images in, dense point cloud
+  and poses out, under a second on a GPU. Relative scale only. Runs from a
+  pretrained checkpoint, has a hosted demo (`facebook/vggt` on Hugging Face
+  Spaces).
+- **MASt3R** (Naver): pairwise dense point-map regression plus a matching head,
+  extends DUSt3R with metric-scale recovery. Metric scale out of the box.
+- **MapAnything** (Meta, 2025): unified feed-forward model, explicitly built
+  for metric 3D reconstruction, optionally takes known calibration/poses/depth
+  as extra input if available and folds it in. Apache 2.0, weights on Hugging
+  Face (`facebook/map-anything-v1`).
+- **Fast3R** (Meta, CVPR 2025): all-images-at-once generalization of DUSt3R,
+  scales to 1000+ images, very fast, relative scale.
 
-Libraries: COLMAP (full SfM pipeline, can be driven from Python), OpenCV for feature
-matching and pose estimation if a lighter custom pipeline is preferred over COLMAP.
+This is a real workaround, not a minor optimization: COLMAP needs enough
+pairwise feature overlap and minutes to hours of matching plus bundle
+adjustment; VGGT/MapAnything need no matching step, no ordering, and run in
+under a second to seconds per capture. For a sparse, unordered photo set this
+directly removes the failure mode that made the photo tier "best-effort" in a
+COLMAP-based design: COLMAP fails outright when two photos of the same room
+do not share enough matched features, feed-forward models degrade gracefully
+instead because they never depend on explicit pairwise matches.
 
-## Tier 1: Photos
+Plan: use MapAnything (metric output, actively maintained, explicit case for
+this exact problem) as the primary reconstruction backend for both the photo
+and video tiers. Video frames are just a densely sampled, ordered image set to
+this class of model, so one backend covers both tiers, the only difference is
+frame extraction (fixed interval sampling with a parallax check for video)
+versus using photos directly.
 
-Same underlying math as video (SfM), but harder because frames are sparse and
-unordered: no guaranteed overlap between any two photos, matching has to run on
-all pairs or a similarity-indexed subset, and there are more failure modes (too
-few shared features between two photos of the same room from different corners).
+Scale: MapAnything and MASt3R claim metric output directly. Treat that as
+unverified until checked against a tape-measure ground truth (the papers'
+benchmarks are not room-reconstruction-specific). If metric output drifts,
+fall back to a metric depth anchor: run a single-image metric depth model
+(Apple **DepthPro**, or **UniDepth**, or **Metric3D v2**, all give true-scale
+depth from one frame with no calibration needed) on one reference frame and
+rescale the point cloud to match. This is a cleaner scale fix than the old
+IMU-fusion/known-object approach: it needs no capture-time cooperation from
+the user and no assumption about what is in frame.
 
-Approach is COLMAP's standard pipeline: exhaustive or vocabulary-tree feature
-matching across all photo pairs, incremental reconstruction (start from the best
-pair, add one image at a time, bundle-adjust as you go). Same scale ambiguity and
-fix as the video tier.
+Once a point cloud and poses exist, from either tier, the plane-fitting and
+polygon-extraction step is shared with the LiDAR tier below. Also worth
+building toward: **PolyRoom** (ECCV 2024 lineage), a transformer that goes
+directly from a point cloud to a clean vectorized floor-plan polygon, built
+specifically to fix the corner/angle/self-intersection errors that hand-rolled
+RANSAC plane intersection produces. Start with the RANSAC-based extractor
+since it is faster to get working, treat PolyRoom as the upgrade path.
 
-This tier has the lowest achievable accuracy and the highest chance of outright
-failure (not enough overlap, too few photos, textureless walls with no features to
-match). The write-up should be explicit that this tier is best-effort, and the
-system should report a confidence score and fail loudly rather than emit a
-plausible-looking but wrong floor plan.
+Multi-room stitching ("stitched" floor plans): VGGT/MapAnything handle this
+natively for a single continuous capture since all frames go through one
+forward pass into one shared point cloud, no separate loop-closure step
+needed the way classic SLAM requires it.
+
+Libraries: `map-anything` (pip-installable, Hugging Face checkpoint), OpenCV
+for frame extraction and any lightweight preprocessing, Open3D for plane
+fitting on the resulting point cloud. COLMAP is not required for the default
+path, keep it noted as a fallback only if a feed-forward model checkpoint
+fails to load or is unavailable in the actual take-home environment.
 
 ## Scale strategy summary
 
 | tier | scale source |
 |---|---|
 | LiDAR | ARKit metric depth, exact |
-| video | IMU fusion (preferred) or a reference measurement |
-| photos | a reference measurement or a known-size object, required |
+| video | MapAnything/MASt3R metric output, verify against a DepthPro anchor |
+| photos | MapAnything/MASt3R metric output, verify against a DepthPro anchor |
 
 ## Architecture
 
@@ -132,13 +160,19 @@ one-off reconstruction, not just a picture of a floor plan.
 
 ## Build vs buy
 
-- LiDAR tier: consider Apple `RoomPlan` as the primary path for iOS capture apps,
-  keep a custom Open3D pipeline as the fallback for raw point cloud exports and for
-  cases needing confidence scoring or multi-room fusion RoomPlan does not expose.
-- Video and photo tiers: COLMAP for the SfM core rather than reimplementing bundle
-  adjustment. Custom code sits around it for scale-fixing, plane extraction, and
-  schema conversion.
+- LiDAR tier: consider Apple `RoomPlan` as the primary path for iOS capture apps.
+  Confirmed accuracy from real measurement studies: 1-3cm, explicitly not
+  sufficient for permit-grade drawings. Keep a custom Open3D pipeline as the
+  fallback for raw point cloud exports and for cases needing confidence scoring
+  or multi-tier fusion RoomPlan does not expose.
+- Video and photo tiers: MapAnything (or VGGT plus a DepthPro metric anchor) as
+  the reconstruction core, a pretrained checkpoint, not a from-scratch model and
+  not a from-scratch SfM pipeline. Custom code sits around it for frame
+  sampling, scale verification, plane extraction, and schema conversion.
 - Plane segmentation and point cloud utilities: Open3D throughout, do not hand-roll.
+- Polygon extraction: start with RANSAC plane intersection in Open3D, PolyRoom
+  as a later upgrade if time allows and the hand-rolled version is producing
+  bad corners.
 
 ## Evaluation strategy
 
@@ -148,30 +182,46 @@ one-off reconstruction, not just a picture of a floor plan.
   direct metric depth; video and photo tiers depend entirely on how well scale gets
   fixed and should be evaluated separately with that caveat stated.
 - Track failure rate, not just accuracy on captures that succeeded: report what
-  fraction of test captures produce no usable output at all, especially for the
-  photo tier.
+  fraction of test captures produce no usable output at all.
+- The metric-scale claims for MapAnything/MASt3R are from the papers' general
+  benchmarks, not room-reconstruction-specific. Verify directly rather than
+  trusting the claim, this is the single most important thing to check early.
 
 ## Risks and edge cases
 
 - Non-rectangular rooms, curved walls, sloped ceilings: plane-fitting assumptions
   break down, needs explicit handling or explicit non-support.
-- Reflective or textureless surfaces (glass, blank drywall): feature matching fails
-  for video/photo tiers, LiDAR depth can also be noisy or missing on glass.
-- Multi-room stitching: requires loop closure and global registration, meaningfully
-  harder than single-room reconstruction, worth scoping down to single-room first
-  if time is short.
-- Moving furniture or people during capture: violates the static-scene assumption
-  SfM and SLAM depend on.
+- Reflective or textureless surfaces (glass, blank drywall): classic feature
+  matching fails here, feed-forward models are more robust to this but not
+  immune, LiDAR depth can also be noisy or missing on glass.
+- Moving furniture or people during capture: violates the static-scene
+  assumption every one of these methods depends on, feed-forward models
+  included.
+- GPU availability: VGGT/MapAnything need a GPU (5.6-40GB VRAM depending on
+  image count). If the take-home environment or grading machine is CPU-only,
+  this needs a rented cloud GPU or a documented CPU fallback path (a smaller
+  photo count, or a documented degrade-to-COLMAP path).
 
-## Execution plan if implementing in one day
+## Execution plan
+
+Building all three tiers for real is the target, not a fallback to "design
+only." A pretrained feed-forward model plus AI-assisted implementation makes
+this a day of integration work, not a multi-month research project.
 
 1. Common schema and plane/polygon extraction module first, since every tier
    depends on it. Test against a synthetic point cloud (a cube) before touching
    real data.
-2. LiDAR tier next: highest chance of a working end-to-end demo by end of day.
-3. Video tier if time allows, using COLMAP as the SfM backend rather than a custom
-   matcher, to keep scope realistic.
-4. Photo tier last, and only as a best-effort path with explicit failure reporting,
-   not a fully polished feature.
+2. LiDAR tier next: direct metric depth, fastest path to a working end-to-end
+   demo, and a correctness reference for the other two tiers.
+3. Photo and video tiers together, same backend: get MapAnything running on a
+   rented GPU, feed it a photo set and a sampled video, confirm point cloud and
+   pose output, then reuse the tier-3 plane/polygon extractor on the result.
+   Verify metric-scale claims immediately against the LiDAR tier or a tape
+   measure, do not assume the papers' numbers hold for this use case.
+4. If MapAnything's metric output is off, add the DepthPro single-frame anchor
+   and rescale.
 5. A CLI or simple script wrapping the pipeline is enough; a UI is out of scope
    unless explicitly asked for.
+6. If time remains: PolyRoom-based polygon extraction as an upgrade over the
+   RANSAC version, and a documented COLMAP fallback path for a no-GPU
+   environment.
