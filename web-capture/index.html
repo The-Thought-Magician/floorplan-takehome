@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Depth capture</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #eee; font-family: monospace; }
+  #overlay {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    padding: 10px; background: rgba(0,0,0,0.6); font-size: 13px; line-height: 1.5;
+  }
+  button {
+    font-size: 15px; padding: 8px 14px; margin: 4px 4px 4px 0;
+    background: #222; color: #eee; border: 1px solid #555; border-radius: 6px;
+  }
+  button:disabled { opacity: 0.4; }
+  #log { white-space: pre-wrap; max-height: 30vh; overflow-y: auto; font-size: 11px; color: #9c9; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="overlay">
+  <div>frames captured: <span id="count">0</span></div>
+  <div>center depth: <span id="depth">-</span> m</div>
+  <button id="start">start ar</button>
+  <button id="capture" disabled>capture frame</button>
+  <button id="export" disabled>export json</button>
+  <button id="stop" disabled>stop</button>
+  <div id="log"></div>
+</div>
+<canvas id="gl-canvas"></canvas>
+<script>
+const log = (msg) => {
+  const el = document.getElementById('log');
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+  console.log(msg);
+};
+
+const GRID_X = 8;
+const GRID_Y = 6;
+
+let session = null;
+let gl = null;
+let refSpace = null;
+let captures = [];
+
+function updateCount() {
+  document.getElementById('count').textContent = captures.length;
+}
+
+function sampleDepthGrid(depthInfo) {
+  const grid = [];
+  for (let j = 0; j < GRID_Y; j++) {
+    const row = [];
+    for (let i = 0; i < GRID_X; i++) {
+      const x = (i + 0.5) / GRID_X;
+      const y = (j + 0.5) / GRID_Y;
+      let meters = null;
+      try {
+        meters = depthInfo.getDepthInMeters(x, y);
+      } catch (e) {
+        meters = null;
+      }
+      row.push(meters);
+    }
+    grid.push(row);
+  }
+  return grid;
+}
+
+let latestFrameData = null;
+
+function onXRFrame(time, frame) {
+  session.requestAnimationFrame(onXRFrame);
+
+  const pose = frame.getViewerPose(refSpace);
+  if (!pose) return;
+
+  const glLayer = session.renderState.baseLayer;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const views = [];
+  for (const view of pose.views) {
+    const viewport = glLayer.getViewport(view);
+    gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+
+    let depthInfo = null;
+    try {
+      depthInfo = frame.getDepthInformation(view);
+    } catch (e) {
+      depthInfo = null;
+    }
+
+    const viewData = {
+      eye: view.eye,
+      transform_matrix: Array.from(view.transform.matrix),
+      projection_matrix: Array.from(view.projectionMatrix),
+      depth_width: depthInfo ? depthInfo.width : null,
+      depth_height: depthInfo ? depthInfo.height : null,
+      raw_value_to_meters: depthInfo ? depthInfo.rawValueToMeters : null,
+      depth_grid_meters: depthInfo ? sampleDepthGrid(depthInfo) : null,
+    };
+    views.push(viewData);
+
+    if (depthInfo) {
+      const center = depthInfo.getDepthInMeters(0.5, 0.5);
+      document.getElementById('depth').textContent = center.toFixed(3);
+    }
+  }
+
+  latestFrameData = { time, views };
+}
+
+async function start() {
+  document.getElementById('start').disabled = true;
+  try {
+    if (!navigator.xr) throw new Error('navigator.xr not present, need a secure context and a WebXR-capable browser');
+
+    const supported = await navigator.xr.isSessionSupported('immersive-ar');
+    if (!supported) throw new Error('immersive-ar not supported on this device/browser');
+
+    session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['depth-sensing'],
+      optionalFeatures: ['dom-overlay'],
+      domOverlay: { root: document.getElementById('overlay') },
+      depthSensing: {
+        usagePreference: ['cpu-optimized'],
+        dataFormatPreference: ['luminance-alpha', 'float32'],
+      },
+    });
+    log('session started, dom-overlay: ' + (session.domOverlayState ? session.domOverlayState.type : 'unsupported'));
+
+    const canvas = document.getElementById('gl-canvas');
+    gl = canvas.getContext('webgl2', { xrCompatible: true });
+    if (!gl) throw new Error('webgl2 context creation failed');
+    await gl.makeXRCompatible();
+
+    session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+    refSpace = await session.requestReferenceSpace('local');
+
+    session.addEventListener('end', () => {
+      log('session ended');
+      document.getElementById('start').disabled = false;
+      document.getElementById('capture').disabled = true;
+      document.getElementById('export').disabled = true;
+      document.getElementById('stop').disabled = true;
+      session = null;
+    });
+
+    document.getElementById('capture').disabled = false;
+    document.getElementById('stop').disabled = false;
+    session.requestAnimationFrame(onXRFrame);
+  } catch (e) {
+    log('error: ' + e.message);
+    document.getElementById('start').disabled = false;
+  }
+}
+
+document.getElementById('start').addEventListener('click', start);
+
+document.getElementById('capture').addEventListener('click', () => {
+  if (!latestFrameData) {
+    log('no frame data yet');
+    return;
+  }
+  captures.push(latestFrameData);
+  updateCount();
+  document.getElementById('export').disabled = false;
+  log('captured frame ' + captures.length);
+});
+
+document.getElementById('export').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({ grid_size: [GRID_X, GRID_Y], captures }, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'depth-capture-' + Date.now() + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('stop').addEventListener('click', () => {
+  if (session) session.end();
+});
+</script>
+</body>
+</html>
