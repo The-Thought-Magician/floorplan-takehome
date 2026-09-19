@@ -10,7 +10,11 @@ Tiers, in order of increasing raw signal quality:
 
 1. Photos: a sparse set of unordered stills.
 2. Video: a continuous handheld walkthrough.
-3. LiDAR: depth-sensing capture from an iPhone/iPad Pro (ARKit scene reconstruction).
+3. Sensor-assisted depth: real-time depth captured at record time, not
+   reconstructed after the fact. LiDAR on Apple Pro devices (ARKit scene
+   reconstruction), or ARCore Depth API depth-from-motion on Android. Kept the
+   name "LiDAR" in the rest of this doc for brevity, but the pipeline is the
+   same for either source, see below.
 
 ## Common output schema
 
@@ -32,12 +36,34 @@ Room
 A single schema means the reconstruction algorithm can change per tier while the
 rest of the system (rendering, estimate generation, QA review) stays fixed.
 
-## Tier 3: LiDAR
+## Tier 3: LiDAR (and its Android equivalent)
 
 Highest confidence, build this first.
 
-Input: ARKit `ARMeshAnchor` scene mesh, or raw `sceneDepth` + camera poses per frame.
-Both give real-world metric scale directly, no scale ambiguity.
+Most customers will not have an Apple Pro device. LiDAR (`ARMeshAnchor`,
+`sceneDepth`) is exclusive to iPhone/iPad Pro models, non-Pro iPhones have no
+software fallback for it in ARKit, this is a hard hardware gate on iOS.
+
+Android does not need special hardware for the equivalent. ARCore's Depth API
+computes depth-from-motion from a single moving camera fused with IMU, no ToF
+sensor required, and covers roughly 88 percent of active ARCore-certified
+Android devices (400+ models: Samsung, Pixel, OnePlus, Xiaomi, and others,
+Android 7.0+). Its pose tracking is confirmed metric-scale (camera plus IMU
+visual-inertial odometry, benchmarked around 1.6-4cm indoor position error),
+which is the same class of accuracy this whole project is targeting. The
+depth values themselves inherit that scale since they come from the same
+tracked camera poses, though Google's own docs describe the depth-specific
+accuracy qualitatively rather than as a hard confirmed number, worth verifying
+directly against a tape measure like everything else in this plan.
+
+So tier 3 in practice has two real sources feeding the same pipeline: ARKit
+LiDAR on Apple Pro devices, ARCore Depth API on most Android devices. Non-Pro
+iPhones are the one real gap, no on-device metric depth exists there, capture
+from those falls through to the tier 1/2 feed-forward pipeline instead.
+
+Input: ARKit `ARMeshAnchor` scene mesh or raw `sceneDepth` plus camera poses,
+or ARCore's per-frame depth image plus tracked pose. Both give real-world
+metric scale directly, no scale ambiguity.
 
 Pipeline:
 1. Load mesh or depth point cloud, transform into a single world frame using the
@@ -54,11 +80,12 @@ Pipeline:
 7. Compute room area and wall lengths directly from the polygon in metric units.
 
 Apple's own `RoomPlan` framework already does steps 1 to 6 on-device and outputs a
-USDZ with labeled walls, openings, and dimensions. Worth being explicit in the
-write-up that `RoomPlan` is the "buy" option for this tier, and the case for
-building it ourselves is control over the intermediate point cloud (needed if we
-ever want confidence scores, custom room labels, or multi-tier fusion) plus not
-being locked into iOS-only capture apps.
+USDZ with labeled walls, openings, and dimensions, but it is iOS-only, no Android
+equivalent product exists. This is the actual case for building our own pipeline
+rather than depending on RoomPlan: it is the only option that works on both ARKit
+LiDAR and ARCore depth-from-motion input, plus it gives control over the
+intermediate point cloud (needed for confidence scores, custom room labels, or
+multi-tier fusion) instead of being locked into one platform's capture app.
 
 ## Tier 2: Video, and Tier 1: Photos
 
@@ -132,7 +159,8 @@ fails to load or is unavailable in the actual take-home environment.
 
 | tier | scale source |
 |---|---|
-| LiDAR | ARKit metric depth, exact |
+| LiDAR (Apple Pro) | ARKit metric depth, exact |
+| depth-from-motion (Android) | ARCore VIO-fused metric depth, verify accuracy |
 | video | MapAnything/MASt3R metric output, verify against a DepthPro anchor |
 | photos | MapAnything/MASt3R metric output, verify against a DepthPro anchor |
 
@@ -197,10 +225,20 @@ one-off reconstruction, not just a picture of a floor plan.
 - Moving furniture or people during capture: violates the static-scene
   assumption every one of these methods depends on, feed-forward models
   included.
-- GPU availability: VGGT/MapAnything need a GPU (5.6-40GB VRAM depending on
-  image count). If the take-home environment or grading machine is CPU-only,
-  this needs a rented cloud GPU or a documented CPU fallback path (a smaller
-  photo count, or a documented degrade-to-COLMAP path).
+- GPU memory: the paper figures for VGGT (5.6GB at 20 views) do not hold up in
+  practice. Real user reports on the official repo show OOM on an 8GB RTX 4070
+  with 6 images, and even OOM on a 24GB RTX 4090 with 10 images, far past the
+  paper's claim. Do not trust the paper's VRAM numbers, test directly on the
+  actual card. A community fork, `harry7557558/vggt-low-vram`, exists
+  specifically for this problem (attention-output memory reduction, explicit
+  fp16/bf16, `torch.cuda.empty_cache()`, `torch.compile`) and claims 150 images
+  on 8GB. Use that fork as the 8GB path rather than stock VGGT. No public 8GB
+  data point exists for MapAnything or MASt3R, treat that as unverified and
+  profile it directly before relying on it (MapAnything ships a
+  `scripts/profile_memory_runtime.py` for exactly this).
+- If 8GB genuinely cannot fit the target image count even with the low-VRAM
+  fork, fall back to a rented cloud GPU for that run, or reduce input
+  resolution and image count and accept a lower-confidence reconstruction.
 
 ## Execution plan
 
@@ -213,11 +251,15 @@ this a day of integration work, not a multi-month research project.
    real data.
 2. LiDAR tier next: direct metric depth, fastest path to a working end-to-end
    demo, and a correctness reference for the other two tiers.
-3. Photo and video tiers together, same backend: get MapAnything running on a
-   rented GPU, feed it a photo set and a sampled video, confirm point cloud and
-   pose output, then reuse the tier-3 plane/polygon extractor on the result.
-   Verify metric-scale claims immediately against the LiDAR tier or a tape
-   measure, do not assume the papers' numbers hold for this use case.
+3. Photo and video tiers together, same backend: run on the local 8GB card
+   first, MapAnything if it profiles clean at the target image count,
+   `vggt-low-vram` if not (stock VGGT is not reliable at 8GB per real user
+   reports, do not use it directly). Confirm point cloud and pose output, then
+   reuse the tier-3 plane/polygon extractor on the result. Verify metric-scale
+   claims immediately against the LiDAR/ARCore tier or a tape measure, do not
+   assume the papers' numbers hold for this use case. Fall back to a rented
+   cloud GPU only if the local card cannot fit a usable image count even with
+   the low-VRAM path.
 4. If MapAnything's metric output is off, add the DepthPro single-frame anchor
    and rescale.
 5. A CLI or simple script wrapping the pipeline is enough; a UI is out of scope
