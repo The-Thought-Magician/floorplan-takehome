@@ -143,12 +143,14 @@ def render_topdown(cloud: o3d.geometry.PointCloud, plan: dict, out_png: Path, ca
 
 
 def _tier_summary(plan: dict, info: dict) -> dict:
-    room = plan["rooms"][0]
+    rooms = plan["rooms"]
     return {
-        "closed": bool(room["polygon_cm"]),
-        "wall_lengths_cm": room.get("wall_lengths_cm"),
-        "area_m2": room.get("area_m2"),
-        "walls": plan["diagnostics"]["walls"],
+        "rooms": len(rooms),
+        "closed": all(bool(r["polygon_cm"]) for r in rooms),
+        "wall_lengths_cm": [r.get("wall_lengths_cm") for r in rooms],
+        "area_m2": [r.get("area_m2") for r in rooms],
+        "wall_height_cm": rooms[0].get("wall_height_cm") if rooms else None,
+        "adjacency": plan.get("adjacency", []),
         **info,
     }
 
@@ -220,3 +222,98 @@ def process_capture_dir(capture_dir: Path) -> dict:
     render_topdown(clean_cloud(cloud), plan, capture_dir / "plan.png", cameras)
     (capture_dir / "plan.json").write_text(json.dumps(plan, indent=2))
     return plan
+
+
+def rooms_to_schema(rooms, floor_y, ceiling_y, wall_height_cm, source_tier: str) -> dict:
+    """Multi-room FloorPlan from segment_rooms output."""
+    out_rooms = []
+    for r in rooms:
+        out_rooms.append(
+            {
+                "id": f"room-{r.label}",
+                "label": "room",
+                "polygon_cm": [[round(float(x) * 100, 1), round(float(z) * 100, 1)] for x, z in r.corners_xz],
+                "wall_lengths_cm": [round(l * 100, 1) for l in r.wall_lengths_m],
+                "area_m2": round(r.area_m2, 3),
+                "perimeter_m": round(sum(r.wall_lengths_m), 3),
+                "wall_height_cm": wall_height_cm,
+                "openings": [{"to": f"room-{d['to']}", "width_cm": round(d["width_m"] * 100, 1), "kind": "doorway"} for d in r.doorways],
+                "confidence": None,
+                "source_tier": source_tier,
+            }
+        )
+    adjacency = sorted({tuple(sorted((f"room-{r.label}", f"room-{d['to']}"))) + (round(d["width_m"] * 100, 1),) for r in rooms for d in r.doorways})
+    return {"rooms": out_rooms, "adjacency": [list(a) for a in adjacency], "floor_y": floor_y, "ceiling_y": ceiling_y}
+
+
+def reconstruct_multiroom(cloud: o3d.geometry.PointCloud, source_tier: str, cameras: np.ndarray | None) -> dict:
+    """Single-rectangle reconstruction plus, when a floor is found, the multi-room segmentation."""
+    from floorplan_takehome.rooms import segment_rooms
+
+    plan = reconstruct(cloud, source_tier=source_tier, cameras=cameras)
+    g = plan["diagnostics"]
+    if g["floor_y"] is not None:
+        pts = np.asarray(clean_cloud(cloud).points)
+        rooms, info = segment_rooms(pts, g["floor_y"], g["ceiling_y"])
+        if rooms:
+            multi = rooms_to_schema(rooms, g["floor_y"], g["ceiling_y"], plan["rooms"][0]["wall_height_cm"], source_tier)
+            plan["single_room_fallback"] = plan["rooms"]
+            plan["rooms"] = multi["rooms"]
+            plan["adjacency"] = multi["adjacency"]
+            plan["diagnostics"]["rooms"] = info
+            plan["_rooms"] = rooms
+    return plan
+
+
+def _write_plan(plan: dict, cloud, cameras, out_dir: Path, tier: str) -> None:
+    from floorplan_takehome.rooms import render_rooms
+
+    suffix = "" if tier == "depth" else f"_{tier}"
+    rooms = plan.pop("_rooms", None)
+    cleaned = clean_cloud(cloud)
+    o3d.io.write_point_cloud(str(out_dir / f"cloud{suffix}.ply"), cleaned)
+    if rooms:
+        render_rooms(np.asarray(cleaned.points), rooms, out_dir / f"plan{suffix}.png", cameras,
+                     title=f"{tier}: {len(rooms)} rooms, {sum(r.area_m2 for r in rooms):.1f} m2")
+    else:
+        render_topdown(cleaned, {"rooms": plan.get("single_room_fallback", plan["rooms"]), "diagnostics": plan["diagnostics"]}, out_dir / f"plan{suffix}.png", cameras)
+    (out_dir / f"plan{suffix}.json").write_text(json.dumps(plan, indent=2, default=str))
+
+
+def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = True, max_images: int = 60) -> dict:
+    """LiDAR tier from depth frames, video tier from rgb.mp4 with per-frame poses, photo tier from 8 stills."""
+    import time
+
+    from floorplan_takehome import stray_scanner as ss
+    from floorplan_takehome.multiview import reconstruct_images
+
+    scan_dir, out_dir = Path(scan_dir), Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    timing = {}
+
+    t = time.time()
+    cloud, cameras = ss.load_point_cloud(scan_dir)
+    plan = reconstruct_multiroom(cloud, "lidar", cameras)
+    plan["capture"] = {"format": "stray_scanner", "frames": int(len(cameras)), "scan": str(scan_dir)}
+    timing["lidar_s"] = round(time.time() - t, 1)
+    _write_plan(plan, cloud, cameras, out_dir, "depth")
+    summary = {"lidar": _tier_summary(plan, {"frames": int(len(cameras))})}
+
+    if run_image_tiers:
+        n_frames = len(cameras)
+        every = max(30, int(np.ceil(n_frames / max_images)))
+        for tier, step in (("video", every), ("photos", max(every, n_frames // 8))):
+            t = time.time()
+            try:
+                paths, known = ss.video_frames_with_poses(scan_dir, out_dir / f"frames_{tier}", every=step)
+                cloud_t, cams_t, info = reconstruct_images(paths, known, cache=out_dir / f"vggt_{tier}.npz")
+                plan_t = reconstruct_multiroom(cloud_t, tier, cams_t)
+                _write_plan(plan_t, cloud_t, cams_t, out_dir, tier)
+                summary[tier] = _tier_summary(plan_t, info)
+            except Exception as e:  # noqa: BLE001
+                summary[tier] = {"error": f"{type(e).__name__}: {e}"}
+            timing[f"{tier}_s"] = round(time.time() - t, 1)
+
+    summary["timing"] = timing
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+    return summary

@@ -92,29 +92,39 @@ def frame_to_points(depth_png: Path, conf_png: Path | None, intrinsics: np.ndarr
     return np.stack([x, y, z], axis=1)
 
 
-def load_point_cloud(scan: Path, max_frames: int = 300, min_confidence: int = 2,
-                     pixel_stride: int = 2, voxel_m: float = 0.02) -> tuple[o3d.geometry.PointCloud, np.ndarray]:
-    """Fuse depth frames into one world-frame cloud. Returns (cloud, camera positions)."""
+def load_point_cloud(scan: Path, max_frames: int | None = None, min_confidence: int = 2,
+                     pixel_stride: int = 1, voxel_m: float = 0.02, chunk: int = 150) -> tuple[o3d.geometry.PointCloud, np.ndarray]:
+    """Fuse depth frames into one world-frame cloud. Returns (cloud, camera positions).
+
+    Every frame is used unless max_frames caps it. Frames are voxel-downsampled per
+    frame and the running cloud is downsampled every `chunk` frames to bound memory.
+    """
     scan = Path(scan)
     intrinsics = load_intrinsics(scan)
     poses = load_odometry(scan)
     frames = sorted(p.stem for p in (scan / "depth").glob("*.png") if p.stem in poses)
-    stride = max(1, len(frames) // max_frames)
-    frames = frames[::stride]
+    if max_frames:
+        frames = frames[:: max(1, len(frames) // max_frames)]
 
     merged = o3d.geometry.PointCloud()
+    pending = o3d.geometry.PointCloud()
     cameras = []
-    for frame in frames:
+    for i, frame in enumerate(frames):
         pts = frame_to_points(scan / "depth" / f"{frame}.png", scan / "confidence" / f"{frame}.png",
                               intrinsics, min_confidence, pixel_stride)
+        m = poses[frame]
+        cameras.append(m[:3, 3])
         if not len(pts):
             continue
-        m = poses[frame]
         world = pts @ m[:3, :3].T + m[:3, 3]
-        chunk = o3d.geometry.PointCloud()
-        chunk.points = o3d.utility.Vector3dVector(world)
-        merged += chunk.voxel_down_sample(voxel_m)
-        cameras.append(m[:3, 3])
+        piece = o3d.geometry.PointCloud()
+        piece.points = o3d.utility.Vector3dVector(world)
+        pending += piece.voxel_down_sample(voxel_m)
+        if (i + 1) % chunk == 0:
+            merged += pending
+            merged = merged.voxel_down_sample(voxel_m)
+            pending = o3d.geometry.PointCloud()
+    merged += pending
     return merged.voxel_down_sample(voxel_m), np.array(cameras)
 
 

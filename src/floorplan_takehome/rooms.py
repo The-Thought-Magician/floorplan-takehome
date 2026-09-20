@@ -134,7 +134,8 @@ def segment_rooms(
     floor_y: float,
     ceiling_y: float | None,
     cell: float = 0.03,
-    door_half_width_m: float = 0.40,
+    door_half_width_m: float = 0.55,
+    corridor_half_width_m: float = 0.30,
     min_room_m2: float = 1.0,
     wall_min_height_m: float = 1.5,
 ) -> tuple[list[RoomPolygon], dict]:
@@ -168,13 +169,29 @@ def segment_rooms(
     free = cv2.morphologyEx(occupied_low.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((k, k), np.uint8)).astype(bool)
     free = ndimage.binary_fill_holes(free) & ~wall_mask
 
-    # split at doorways: erode past the doorway half width, label, grow back inside free space
-    erode_px = int(door_half_width_m / cell)
-    cores = cv2.erode(free.astype(np.uint8), np.ones((2 * erode_px + 1, 2 * erode_px + 1), np.uint8)).astype(bool)
-    labels, n = ndimage.label(cores)
-    sizes = ndimage.sum(cores, labels, range(1, n + 1))
+    # split at doorways: erode past the doorway half width, label the cores as rooms.
+    # Narrow spaces (corridors) vanish at that erosion, so a second, gentler erosion
+    # adds seeds for free space no room core reached.
+    def cores_at(radius_m):
+        px = int(radius_m / cell)
+        return cv2.erode(free.astype(np.uint8), np.ones((2 * px + 1, 2 * px + 1), np.uint8)).astype(bool)
+
+    labels, n = ndimage.label(cores_at(door_half_width_m))
+    sizes = ndimage.sum(labels > 0, labels, range(1, n + 1))
     keep_ids = [i + 1 for i, s in enumerate(sizes) if s * cell * cell >= min_room_m2]
     seeds = np.where(np.isin(labels, keep_ids), labels, 0)
+
+    narrow, n2 = ndimage.label(cores_at(corridor_half_width_m) & (seeds == 0))
+    # a narrow component that touches a room core is that room's fringe, not a corridor
+    touching = set(np.unique(cv2.dilate((seeds > 0).astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool) * narrow)) - {0}
+    sizes2 = ndimage.sum(narrow > 0, narrow, range(1, n2 + 1))
+    next_id = (max(keep_ids) if keep_ids else 0) + 1
+    for i, s in enumerate(sizes2):
+        if (i + 1) not in touching and s * cell * cell >= min_room_m2:
+            seeds[narrow == i + 1] = next_id
+            keep_ids.append(next_id)
+            next_id += 1
+
     # region growing: nearest seed within free space
     dist, (ri, ci) = ndimage.distance_transform_edt(seeds == 0, return_indices=True)
     grown = np.where(free, seeds[ri, ci], 0)
