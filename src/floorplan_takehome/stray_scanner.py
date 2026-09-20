@@ -92,16 +92,38 @@ def frame_to_points(depth_png: Path, conf_png: Path | None, intrinsics: np.ndarr
     return np.stack([x, y, z], axis=1)
 
 
+def window_clouds(scan: Path, window: int = 300, stride: int = 6, min_confidence: int = 2,
+                  pixel_stride: int = 2) -> tuple[list[tuple[int, np.ndarray]], dict[str, np.ndarray]]:
+    """Per time window, the world points of a strided subset of its frames (raw poses)."""
+    scan = Path(scan)
+    intrinsics = load_intrinsics(scan)
+    poses = load_odometry(scan)
+    frames = sorted(p.stem for p in (scan / "depth").glob("*.png") if p.stem in poses)
+    out = []
+    for start in range(0, len(frames), window):
+        pts = []
+        for frame in frames[start : start + window : stride]:
+            local = frame_to_points(scan / "depth" / f"{frame}.png", scan / "confidence" / f"{frame}.png", intrinsics, min_confidence, pixel_stride)
+            if len(local):
+                m = poses[frame]
+                pts.append(local @ m[:3, :3].T + m[:3, 3])
+        if pts:
+            out.append((start + min(window, len(frames) - start) // 2, np.concatenate(pts)))
+    return out, poses
+
+
 def load_point_cloud(scan: Path, max_frames: int | None = None, min_confidence: int = 2,
-                     pixel_stride: int = 1, voxel_m: float = 0.02, chunk: int = 150) -> tuple[o3d.geometry.PointCloud, np.ndarray]:
+                     pixel_stride: int = 1, voxel_m: float = 0.02, chunk: int = 150,
+                     poses: dict[str, np.ndarray] | None = None) -> tuple[o3d.geometry.PointCloud, np.ndarray]:
     """Fuse depth frames into one world-frame cloud. Returns (cloud, camera positions).
 
     Every frame is used unless max_frames caps it. Frames are voxel-downsampled per
     frame and the running cloud is downsampled every `chunk` frames to bound memory.
+    poses overrides the odometry (drift-corrected poses).
     """
     scan = Path(scan)
     intrinsics = load_intrinsics(scan)
-    poses = load_odometry(scan)
+    poses = poses if poses is not None else load_odometry(scan)
     frames = sorted(p.stem for p in (scan / "depth").glob("*.png") if p.stem in poses)
     if max_frames:
         frames = frames[:: max(1, len(frames) // max_frames)]

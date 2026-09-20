@@ -291,7 +291,7 @@ def _write_plan(plan: dict, cloud, cameras, out_dir: Path, tier: str, info: dict
     from floorplan_takehome.intervals import add_intervals
     from floorplan_takehome.rooms import render_rooms
 
-    add_intervals(plan, "lidar" if tier == "depth" and plan.get("capture", {}).get("format") == "stray_scanner" else tier, info)
+    add_intervals(plan, "lidar" if tier.startswith("depth") and plan.get("capture", {}).get("format") == "stray_scanner" else tier.split("_")[0], info)
 
     suffix = "" if tier == "depth" else f"_{tier}"
     rooms = plan.pop("_rooms", None)
@@ -316,13 +316,41 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
     out_dir.mkdir(parents=True, exist_ok=True)
     timing = {}
 
+    from floorplan_takehome.drift import apply_drift_correction, estimate_yaw_drift, footprint_metrics
+
     t = time.time()
-    cloud, cameras = ss.load_point_cloud(scan_dir)
+    # drift: estimate heading drift from wall directions per time window, correct poses,
+    # and keep the uncorrected footprint as the ablation
+    windows, raw_poses = ss.window_clouds(scan_dir)
+    floor_guess = float(np.percentile(np.concatenate([w[1][:, 1] for w in windows]), 2)) if windows else 0.0
+    drift = estimate_yaw_drift(windows, floor_guess)
+    cloud_off, cameras = ss.load_point_cloud(scan_dir)
+    drift_info = {"method": "plane-anchored yaw correction (orientation only, no loop closure)", "estimate": None}
+    if drift is not None:
+        cloud, cameras = ss.load_point_cloud(scan_dir, poses=apply_drift_correction(raw_poses, drift))
+        drift_info["estimate"] = {
+            "rate_deg_per_min": drift.rate_deg_per_min,
+            "window_frames": drift.window_frames,
+            "deviation_deg": drift.deviation_deg,
+            "fit_deg": drift.fit_deg,
+            "max_correction_deg": round(max(abs(f) for f in drift.fit_deg), 2),
+        }
+    else:
+        cloud = cloud_off
+        drift_info["estimate"] = "not enough wall-bearing windows to estimate drift"
+    plan_off = reconstruct_multiroom(cloud_off, "lidar", cameras)
     plan = reconstruct_multiroom(cloud, "lidar", cameras)
+    floor_y = plan["diagnostics"]["floor_y"] or floor_guess
+    drift_info["ablation"] = {
+        "off": {**footprint_metrics(np.asarray(clean_cloud(cloud_off).points), floor_y), "rooms": len(plan_off["rooms"]), "area_m2": [r.get("area_m2") for r in plan_off["rooms"]]},
+        "on": {**footprint_metrics(np.asarray(clean_cloud(cloud).points), floor_y), "rooms": len(plan["rooms"]), "area_m2": [r.get("area_m2") for r in plan["rooms"]]},
+    }
+    plan["diagnostics"]["drift"] = drift_info
     plan["capture"] = {"format": "stray_scanner", "frames": int(len(cameras)), "scan": str(scan_dir)}
     timing["lidar_s"] = round(time.time() - t, 1)
+    _write_plan(plan_off, cloud_off, cameras, out_dir, "depth_drift_off")
     _write_plan(plan, cloud, cameras, out_dir, "depth")
-    summary = {"lidar": _tier_summary(plan, {"frames": int(len(cameras))})}
+    summary = {"lidar": _tier_summary(plan, {"frames": int(len(cameras)), "drift": drift_info})}
 
     if run_image_tiers:
         every = 30  # 2 frames per second at 60 fps; chunking bounds memory, not the frame count
