@@ -163,7 +163,15 @@ def reconstruct_images(
         centers = apply_similarity(centers, scale, rotation, translation)
         info.update(fit)
     else:
-        info["scale"] = None
+        # no poses: monocular metric depth is the only scale source. Gravity is
+        # unknown too, so the cloud is levelled by its dominant floor plane later.
+        fov = {i: f for i, p in enumerate(image_paths) if (f := fov_x_from_exif(p))}
+        scale, fit = moge_scale(image_paths, out, fov)
+        level = level_by_camera_up(out["extrinsic"])
+        pivot = centers.mean(axis=0)
+        points = (points - pivot) @ level.T * scale
+        centers = (centers - pivot) @ level.T * scale
+        info.update({"scale": round(scale, 4), "scale_used": "moge2", "levelled_by": "camera_up", "fov_from_exif": len(fov), **fit})
 
     cloud = o3d.geometry.PointCloud()
     cloud.points = o3d.utility.Vector3dVector(points.astype(np.float64))
@@ -378,3 +386,109 @@ def reconstruct_photo_folders(folders: dict[str, tuple[list[str], dict[int, np.n
         "per_room": per_room,
     }
     return cloud, np.concatenate(centers), info
+
+
+def fov_x_from_exif(path: str) -> float | None:
+    """Horizontal field of view in degrees from the 35mm-equivalent focal length, if present."""
+    try:
+        from PIL import Image
+        from PIL.ExifTags import Base
+
+        with Image.open(path) as im:
+            exif = im.getexif()
+            f35 = exif.get(Base.FocalLengthIn35mmFilm)
+            w, h = im.size
+    except Exception:  # noqa: BLE001, any unreadable EXIF means no FOV
+        return None
+    if not f35:
+        return None
+    sensor_side = 36.0 if w >= h else 24.0  # width of the image on a 35mm frame
+    return float(np.degrees(2 * np.arctan(sensor_side / (2 * float(f35)))))
+
+
+def level_by_camera_up(extrinsic: np.ndarray) -> np.ndarray:
+    """Rotation that makes world y point up, from the cameras' own up axes.
+
+    Without poses the VGGT world is the first camera's frame. Phones are held upright,
+    so the mean of the cameras' up axes (minus the OpenCV y column of camera-to-world)
+    is the best available gravity estimate; pitch on individual frames averages out.
+    """
+    ups = -np.transpose(extrinsic[:, :, :3], (0, 2, 1))[:, :, 1]  # world-from-camera columns
+    up = ups.mean(axis=0)
+    up /= np.linalg.norm(up) + 1e-9
+    target = np.array([0.0, 1.0, 0.0])
+    v = np.cross(up, target)
+    c = float(up @ target)
+    if np.linalg.norm(v) < 1e-9:
+        return np.eye(3) if c > 0 else np.diag([1.0, -1.0, -1.0])
+    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + vx + vx @ vx * (1 / (1 + c))
+
+
+def aggregate_frame_scales(per_frame: list[tuple[float, float]]) -> tuple[float, dict]:
+    """per_frame: (scale ratio, median metric depth). Frames that see a whole wall (the
+    farther half by depth) are where a monocular metric model and a view model agree
+    best, so the anchor is the median over that half. Both numbers are returned."""
+    ratios = np.array([r for r, _ in per_frame])
+    depths = np.array([d for _, d in per_frame])
+    far = ratios[depths >= np.median(depths)] if len(per_frame) >= 4 else ratios
+    return float(np.median(far)), {
+        "moge_scale_all_frames": round(float(np.median(ratios)), 4),
+        "moge_scale_far_frames": round(float(np.median(far)), 4),
+        "moge_scale_min": round(float(ratios.min()), 4),
+        "moge_scale_max": round(float(ratios.max()), 4),
+        "moge_frames": int(len(ratios)),
+    }
+
+
+def moge_scale(image_paths: list[str], out: dict, fov_x: dict[int, float] | None = None,
+               conf_percentile: float = 70.0, max_frames: int = 12) -> tuple[float, dict]:
+    """Metric scale for a VGGT reconstruction from MoGe-2 monocular metric depth.
+
+    For each image the ratio of MoGe depth to VGGT depth is taken pixel by pixel on
+    the confident pixels; the frame ratio is the median. fov_x (degrees per image
+    index) sharpens MoGe's metric estimate when known.
+    """
+    import cv2
+    import torch
+    from moge.model.v2 import MoGeModel
+
+    pts, conf, ext = out["points"], out["conf"], out["extrinsic"]
+    s, h, w, _ = pts.shape
+    pick = list(range(s)) if s <= max_frames else [int(round(k)) for k in np.linspace(0, s - 1, max_frames)]
+    model = MoGeModel.from_pretrained("Ruicheng/moge-2-vitl").to("cuda").eval()
+    per_frame = []
+    for i in pick:
+        img = cv2.cvtColor(cv2.imread(image_paths[i]), cv2.COLOR_BGR2RGB)
+        ph_h, ph_w = img.shape[:2]
+        x = torch.tensor(img / 255, dtype=torch.float32, device="cuda").permute(2, 0, 1)
+        with torch.no_grad():
+            fov = (fov_x or {}).get(i)
+            res = model.infer(x, fov_x=fov) if fov else model.infer(x)
+        depth = res["depth"].cpu().numpy()
+        mask = res["mask"].cpu().numpy()
+        # VGGT pad mode: the long side is 518, the short side scaled and centred
+        if ph_h >= ph_w:
+            img_w = round(ph_w * h / ph_h / 14) * 14
+            x0 = (w - img_w) // 2
+            sl = (slice(None), slice(x0, x0 + img_w))
+            size = (img_w, h)
+        else:
+            img_h = round(ph_h * w / ph_w / 14) * 14
+            y0 = (h - img_h) // 2
+            sl = (slice(y0, y0 + img_h), slice(None))
+            size = (w, img_h)
+        rot, t = ext[i, :, :3], ext[i, :, 3]
+        vg = (pts[i].reshape(-1, 3) @ rot.T + t)[:, 2].reshape(h, w)[sl]
+        cf = conf[i][sl]
+        mg = cv2.resize(depth, size, interpolation=cv2.INTER_NEAREST)
+        mk = cv2.resize(mask.astype(np.uint8), size, interpolation=cv2.INTER_NEAREST).astype(bool)
+        good = mk & (vg > 1e-3) & (cf >= np.percentile(cf, conf_percentile)) & (mg > 0.1)
+        if good.sum() < 200:
+            continue
+        per_frame.append((float(np.median(mg[good] / vg[good])), float(np.median(mg[good]))))
+    del model
+    torch.cuda.empty_cache()
+    if not per_frame:
+        raise ValueError("MoGe found no usable overlap with the VGGT depth")
+    return aggregate_frame_scales(per_frame)

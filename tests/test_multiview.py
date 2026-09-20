@@ -63,3 +63,43 @@ def test_horizontal_frames_drops_floor_facing_cameras():
 
     poses = {0: pose(0), 1: pose(-70), 2: pose(30), 3: pose(80)}
     assert horizontal_frames(poses) == [0, 2]
+
+
+def test_fov_from_exif_uses_the_short_side_for_portrait(tmp_path):
+    from PIL import Image
+    from PIL.ExifTags import Base
+
+    from floorplan_takehome.multiview import fov_x_from_exif
+
+    im = Image.new("RGB", (600, 800))
+    exif = Image.Exif()
+    exif[Base.FocalLengthIn35mmFilm] = 26
+    p = tmp_path / "p.jpg"
+    im.save(p, exif=exif)
+    fov = fov_x_from_exif(str(p))
+    assert abs(fov - np.degrees(2 * np.arctan(24 / 52))) < 0.1
+    assert fov_x_from_exif(str(tmp_path / "missing.jpg")) is None
+
+
+def test_far_frames_anchor_the_scale():
+    from floorplan_takehome.multiview import aggregate_frame_scales
+
+    per_frame = [(1.7, 1.0), (1.8, 1.2), (2.3, 2.5), (2.25, 2.6), (2.35, 2.8), (1.6, 0.9)]
+    scale, info = aggregate_frame_scales(per_frame)
+    assert abs(scale - 2.3) < 0.05
+    assert info["moge_scale_all_frames"] < scale
+
+
+def test_level_by_camera_up_rotates_mean_up_axis_to_y():
+    from floorplan_takehome.multiview import level_by_camera_up
+
+    # cameras whose up axis (OpenCV -y) points along world +z, with some pitch spread
+    ext = []
+    for pitch in (-10, 0, 10):
+        th = np.radians(pitch)
+        # world-from-camera with camera y (down) = -z world rotated by pitch about x
+        r_wc = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=float) @ np.array([[1, 0, 0], [0, np.cos(th), -np.sin(th)], [0, np.sin(th), np.cos(th)]])
+        ext.append(np.concatenate([r_wc.T, np.zeros((3, 1))], axis=1))
+    level = level_by_camera_up(np.array(ext))
+    up = -np.array(ext)[:, :, :3].transpose(0, 2, 1)[:, :, 1].mean(axis=0)
+    np.testing.assert_allclose(level @ (up / np.linalg.norm(up)), [0, 1, 0], atol=1e-9)
