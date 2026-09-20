@@ -201,7 +201,7 @@ def process_image_tiers(capture_dir: Path, plan: dict) -> dict:
                 info["pose_scale"] = info["scale"]
                 info["scale"] = check["depth_based_scale"]
             tier_plan = reconstruct_multiroom(cloud, tier, cameras)
-            _write_plan(tier_plan, cloud, cameras, capture_dir, tier)
+            _write_plan(tier_plan, cloud, cameras, capture_dir, tier, info)
             tiers[tier] = _tier_summary(tier_plan, info)
         except Exception as e:  # noqa: BLE001, surfaced in the plan
             tiers[tier] = {"error": f"{type(e).__name__}: {e}"}
@@ -235,6 +235,9 @@ def process_capture_dir(capture_dir: Path) -> dict:
         "photos": sorted(p.name for p in (capture_dir / "photos").glob("*.jpg")) if (capture_dir / "photos").exists() else [],
         "video": (capture_dir / "video.webm").name if (capture_dir / "video.webm").exists() else None,
     }
+    from floorplan_takehome.intervals import add_intervals
+
+    add_intervals(plan, "depth")
     o3d.io.write_point_cloud(str(capture_dir / "cloud.ply"), clean_cloud(cloud))
     render_topdown(clean_cloud(cloud), plan, capture_dir / "plan.png", cameras)
     (capture_dir / "plan.json").write_text(json.dumps(plan, indent=2))
@@ -284,8 +287,11 @@ def reconstruct_multiroom(cloud: o3d.geometry.PointCloud, source_tier: str, came
     return plan
 
 
-def _write_plan(plan: dict, cloud, cameras, out_dir: Path, tier: str) -> None:
+def _write_plan(plan: dict, cloud, cameras, out_dir: Path, tier: str, info: dict | None = None) -> None:
+    from floorplan_takehome.intervals import add_intervals
     from floorplan_takehome.rooms import render_rooms
+
+    add_intervals(plan, "lidar" if tier == "depth" and plan.get("capture", {}).get("format") == "stray_scanner" else tier, info)
 
     suffix = "" if tier == "depth" else f"_{tier}"
     rooms = plan.pop("_rooms", None)
@@ -326,7 +332,7 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
         try:
             cloud_t, cams_t, info = reconstruct_video_chunked(paths, known, cache_dir=out_dir / "vggt_video_chunks")
             plan_t = reconstruct_multiroom(cloud_t, "video", cams_t)
-            _write_plan(plan_t, cloud_t, cams_t, out_dir, "video")
+            _write_plan(plan_t, cloud_t, cams_t, out_dir, "video", info)
             summary["video"] = _tier_summary(plan_t, info)
         except Exception as e:  # noqa: BLE001
             summary["video"] = {"error": f"{type(e).__name__}: {e}"}
@@ -340,7 +346,7 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
             folders = photo_folders_from_rooms(plan["rooms"], paths, known, per_room=8)
             cloud_t, cams_t, info = reconstruct_photo_folders(folders, cache_dir=out_dir / "vggt_photos")
             plan_t = reconstruct_multiroom(cloud_t, "photos", cams_t)
-            _write_plan(plan_t, cloud_t, cams_t, out_dir, "photos")
+            _write_plan(plan_t, cloud_t, cams_t, out_dir, "photos", info)
             summary["photos"] = _tier_summary(plan_t, info)
         except Exception as e:  # noqa: BLE001
             summary["photos"] = {"error": f"{type(e).__name__}: {e}"}
