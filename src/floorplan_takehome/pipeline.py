@@ -45,7 +45,7 @@ def _floor_and_ceiling(planes, camera_y: float | None) -> tuple[float | None, fl
 def camera_positions(json_path: Path) -> np.ndarray:
     data = json.loads(Path(json_path).read_text())
     positions = []
-    for capture in data["captures"]:
+    for capture in data.get("captures", []):
         for view in capture["views"]:
             m = np.array(view["transform_matrix"], dtype=float).reshape(4, 4, order="F")
             positions.append(m[:3, 3])
@@ -247,17 +247,14 @@ def process_capture_dir(capture_dir: Path) -> dict:
         return plan
     cloud = load_point_cloud(str(json_path))
     cameras = camera_positions(json_path)
-    plan = reconstruct(cloud, source_tier="depth", cameras=cameras)
+    plan = reconstruct_multiroom(cloud, "depth", cameras)
     plan["capture"] = {
+        "format": "web_capture",
+        "frames": int(len(cameras)),
         "photos": sorted(p.name for p in (capture_dir / "photos").glob("*.jpg")) if (capture_dir / "photos").exists() else [],
-        "video": (capture_dir / "video.webm").name if (capture_dir / "video.webm").exists() else None,
+        "video": next((p.name for p in capture_dir.glob("video.*")), None),
     }
-    from floorplan_takehome.intervals import add_intervals
-
-    add_intervals(plan, "depth")
-    o3d.io.write_point_cloud(str(capture_dir / "cloud.ply"), clean_cloud(cloud))
-    render_topdown(clean_cloud(cloud), plan, capture_dir / "plan.png", cameras)
-    (capture_dir / "plan.json").write_text(json.dumps(plan, indent=2))
+    _write_plan(plan, cloud, cameras, capture_dir, "depth")
     return plan
 
 
@@ -308,7 +305,8 @@ def _write_plan(plan: dict, cloud, cameras, out_dir: Path, tier: str, info: dict
     from floorplan_takehome.intervals import add_intervals
     from floorplan_takehome.rooms import render_rooms
 
-    add_intervals(plan, "lidar" if tier.startswith("depth") and plan.get("capture", {}).get("format") == "stray_scanner" else tier.split("_")[0], info)
+    fmt = plan.get("capture", {}).get("format", "stray_scanner")
+    add_intervals(plan, "lidar" if tier.startswith("depth") and fmt == "stray_scanner" else tier.split("_")[0], info)
 
     suffix = "" if tier == "depth" else f"_{tier}"
     rooms = plan.pop("_rooms", None)
@@ -356,6 +354,7 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
         cloud = cloud_off
         drift_info["estimate"] = "not enough wall-bearing windows to estimate drift"
     plan_off = reconstruct_multiroom(cloud_off, "lidar", cameras)
+    plan_off["capture"] = {"format": "stray_scanner"}
     plan = reconstruct_multiroom(cloud, "lidar", cameras)
     floor_y = plan["diagnostics"]["floor_y"] or floor_guess
     drift_info["ablation"] = {
@@ -397,7 +396,6 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
             summary["photos"] = {"error": f"{type(e).__name__}: {e}"}
         timing["photos_s"] = round(time.time() - t, 1)
 
-    if run_image_tiers:
         t = time.time()
         try:
             damage = run_damage_for_stray(scan_dir, out_dir, plan)
@@ -417,14 +415,10 @@ def run_damage_for_capture(capture_dir: Path, plan: dict, backend: str | None = 
     from floorplan_takehome.depth_capture import _depth_grid
 
     capture_dir = Path(capture_dir)
-    data = json.loads((capture_dir / "capture.json").read_text())
+    from floorplan_takehome.multiview import photo_records
+
     photo_poses, depth_views = {}, {}
-    for record in data.get("captures", []):
-        photo = record.get("photo")
-        if not photo or not (capture_dir / photo).exists():
-            continue
-        view = record["views"][0]
-        path = str(capture_dir / photo)
+    for path, view in photo_records(capture_dir):
         photo_poses[path] = (np.array(view["projection_matrix"]).reshape(4, 4, order="F"), np.array(view["transform_matrix"]).reshape(4, 4, order="F"))
         depth_views[path] = view
     if not photo_poses:

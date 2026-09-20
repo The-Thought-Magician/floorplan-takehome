@@ -6,6 +6,8 @@ gets an https origin (WebXR requires a secure context).
 
 import json
 import logging
+import re
+import shutil
 import threading
 import time
 import uuid
@@ -36,17 +38,27 @@ def _set(capture_id: str, **fields) -> None:
         _status[capture_id].update(fields)
 
 
+CAPTURE_ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
+
+
+def _capture_dir(capture_id: str) -> Path:
+    if not CAPTURE_ID.match(capture_id):
+        raise HTTPException(404, "unknown capture")
+    return CAPTURES_DIR / capture_id
+
+
 def _safe_extract(zip_path: Path, dest: Path) -> None:
+    dest = dest.resolve()
     with zipfile.ZipFile(zip_path) as zf:
-        for member in zf.infolist():
-            target = (dest / member.filename).resolve()
-            if not str(target).startswith(str(dest.resolve())):
+        members = zf.infolist()
+        if sum(m.file_size for m in members) > 4 * MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "zip expands too large")
+        for member in members:
+            if not (dest / member.filename).resolve().is_relative_to(dest):
                 raise HTTPException(400, "zip contains unsafe paths")
+        if not any(m.filename == "capture.json" for m in members):
+            raise HTTPException(400, "zip has no capture.json")
         zf.extractall(dest)
-    if not (dest / "capture.json").exists():
-        raise HTTPException(400, "zip has no capture.json")
-    if sum(p.stat().st_size for p in dest.rglob("*") if p.is_file()) > 4 * MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "zip expands too large")
 
 
 def _run(capture_id: str, capture_dir: Path) -> None:
@@ -95,7 +107,11 @@ async def upload_capture(file: UploadFile):
     try:
         _safe_extract(zip_path, capture_dir)
     except zipfile.BadZipFile:
+        shutil.rmtree(capture_dir, ignore_errors=True)
         raise HTTPException(400, "not a zip file")
+    except HTTPException:
+        shutil.rmtree(capture_dir, ignore_errors=True)
+        raise
 
     _set(capture_id, state="queued", bytes=size)
     threading.Thread(target=_run, args=(capture_id, capture_dir), daemon=True).start()
@@ -104,8 +120,8 @@ async def upload_capture(file: UploadFile):
 
 @app.post("/api/captures/{capture_id}/video")
 async def upload_video(capture_id: str, file: UploadFile):
-    capture_dir = CAPTURES_DIR / capture_id
-    if not capture_dir.is_dir() or "/" in capture_id or ".." in capture_id:
+    capture_dir = _capture_dir(capture_id)
+    if not capture_dir.is_dir():
         raise HTTPException(404, "unknown capture")
     size = 0
     with open(capture_dir / "video.webm", "wb") as out:
@@ -122,7 +138,7 @@ def capture_status(capture_id: str):
     with _lock:
         status = _status.get(capture_id)
     if status is None:
-        plan_path = CAPTURES_DIR / capture_id / "plan.json"
+        plan_path = _capture_dir(capture_id) / "plan.json"
         if plan_path.exists():
             return {"id": capture_id, "state": "done", "plan": json.loads(plan_path.read_text())}
         raise HTTPException(404, "unknown capture")
@@ -134,7 +150,7 @@ def capture_png(capture_id: str, tier: str = "depth"):
     name = "plan.png" if tier == "depth" else f"plan_{tier}.png"
     if tier not in ("depth", "photos", "video"):
         raise HTTPException(400, "unknown tier")
-    png = CAPTURES_DIR / capture_id / name
+    png = _capture_dir(capture_id) / name
     if not png.exists():
         raise HTTPException(404, "no plan image yet")
     return FileResponse(png, headers={"Cache-Control": "no-store"})

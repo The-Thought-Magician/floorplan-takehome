@@ -178,20 +178,27 @@ def reconstruct_images(
     return cloud, centers, info
 
 
-def photo_paths_and_poses(capture_dir: Path) -> tuple[list[str], dict[int, np.ndarray]]:
-    """Photos saved by the capture page, with the ARCore camera-to-world matrix of each."""
+def photo_records(capture_dir: Path) -> list[tuple[str, dict]]:
+    """(photo path, view record) for every photo the capture page saved."""
     import json
 
+    capture_dir = Path(capture_dir)
     data = json.loads((capture_dir / "capture.json").read_text())
-    paths, centers = [], {}
-    for record in data["captures"]:
+    out = []
+    for record in data.get("captures", []):
         photo = record.get("photo")
-        if not photo or not (capture_dir / photo).exists():
-            continue
-        m = np.array(record["views"][0]["transform_matrix"], dtype=float).reshape(4, 4, order="F")
-        centers[len(paths)] = m
-        paths.append(str(capture_dir / photo))
-    return paths, centers
+        if photo and (capture_dir / photo).exists():
+            out.append((str(capture_dir / photo), record["views"][0]))
+    return out
+
+
+def photo_paths_and_poses(capture_dir: Path) -> tuple[list[str], dict[int, np.ndarray]]:
+    """Photos saved by the capture page, with the ARCore camera-to-world matrix of each."""
+    paths, poses = [], {}
+    for path, view in photo_records(capture_dir):
+        poses[len(paths)] = np.array(view["transform_matrix"], dtype=float).reshape(4, 4, order="F")
+        paths.append(path)
+    return paths, poses
 
 
 def video_frame_paths(capture_dir: Path, fps: float = 1.0) -> list[str]:
@@ -210,6 +217,9 @@ def video_frame_paths(capture_dir: Path, fps: float = 1.0) -> list[str]:
             capture_output=True,
         )
         if result.returncode != 0:
+            import logging
+
+            logging.getLogger("floorplan").warning("ffmpeg failed on %s: %s", video.name, result.stderr.decode(errors="replace")[-300:])
             return []
     return sorted(str(p) for p in frames_dir.glob("*.jpg"))
 
@@ -226,7 +236,7 @@ def depth_scale_check(capture_dir: Path, image_paths: list[str], cache: Path, co
     from floorplan_takehome.depth_capture import _depth_in_view_coords
 
     data = json.loads((capture_dir / "capture.json").read_text())
-    by_photo = {r["photo"]: r for r in data["captures"] if r.get("photo")}
+    by_photo = {r["photo"]: r for r in data.get("captures", []) if r.get("photo")}
     z = np.load(cache, allow_pickle=True)
     pts, conf, ext = z["points"], z["conf"], z["extrinsic"]
     _, h, w, _ = pts.shape

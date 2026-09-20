@@ -43,7 +43,7 @@ def wall_openings(points: np.ndarray, corners_xz: np.ndarray, floor_y: float, ce
     n = len(corners_xz)
     xz = points[:, [0, 2]]
     y = points[:, 1]
-    top = min(ceiling_y - 0.1, floor_y + 2.0) if ceiling_y else floor_y + 2.0
+    top = min(ceiling_y - 0.1, floor_y + 2.0) if ceiling_y is not None else floor_y + 2.0
     openings = []
     for i in range(n):
         a, b = corners_xz[i], corners_xz[(i + 1) % n]
@@ -98,16 +98,20 @@ def wall_openings(points: np.ndarray, corners_xz: np.ndarray, floor_y: float, ce
 def room_heights(points: np.ndarray, corners_xz: np.ndarray, floor_hint: float, bin_m: float = 0.02) -> tuple[float | None, float | None]:
     """Floor and ceiling height inside one room polygon from the two strongest horizontal
     point layers: the lowest peak near the floor hint and the highest peak above 2 m."""
-    inside = cv2.pointPolygonTest
-    poly = corners_xz.astype(np.float32).reshape(-1, 1, 2)
-    xz = points[:, [0, 2]].astype(np.float32)
-    # bounding-box prefilter, then exact polygon test on the survivors
+    xz = points[:, [0, 2]]
     lo, hi = corners_xz.min(axis=0), corners_xz.max(axis=0)
     box = (xz[:, 0] >= lo[0]) & (xz[:, 0] <= hi[0]) & (xz[:, 1] >= lo[1]) & (xz[:, 1] <= hi[1])
     idx = np.flatnonzero(box)
-    if len(idx) > 60000:
-        idx = idx[:: len(idx) // 60000]
-    keep = np.array([inside(poly, (float(x), float(z)), False) >= 0 for x, z in xz[idx]])
+    if len(idx) < 200:
+        return None, None
+    # rasterise the polygon once and look points up in it, instead of a per-point test
+    cell = 0.05
+    shape = (int((hi[1] - lo[1]) / cell) + 2, int((hi[0] - lo[0]) / cell) + 2)
+    mask = np.zeros(shape, dtype=np.uint8)
+    poly_px = np.round((corners_xz - lo) / cell).astype(np.int32).reshape(-1, 1, 2)
+    cv2.fillPoly(mask, [poly_px], 1)
+    ij = np.floor((xz[idx] - lo) / cell).astype(int)
+    keep = mask[np.clip(ij[:, 1], 0, shape[0] - 1), np.clip(ij[:, 0], 0, shape[1] - 1)].astype(bool)
     y = points[idx[keep], 1]
     if len(y) < 200:
         return None, None

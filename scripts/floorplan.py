@@ -8,10 +8,11 @@ unpacked zip from the web capture page (capture.json).
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from floorplan_takehome import pipeline, stray_scanner
-from floorplan_takehome.pipeline import process_capture_dir, process_image_tiers, process_stray_scan
+from floorplan_takehome.pipeline import process_capture_dir, process_image_tiers, process_stray_scan, run_damage_for_capture
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
@@ -27,7 +28,14 @@ if __name__ == "__main__":
         summary = process_stray_scan(scan, out)
     elif (src / "capture.json").exists():
         plan = process_capture_dir(src)
-        summary = {"depth": plan["rooms"], "tiers": process_image_tiers(src, plan)}
+        tiers = process_image_tiers(src, plan)
+        damage = run_damage_for_capture(src, plan)
+        summary = {
+            "depth": {"rooms": len(plan["rooms"]), "wall_lengths_cm": [r.get("wall_lengths_cm") for r in plan["rooms"]], "wall_height_cm": [r.get("wall_height_cm") for r in plan["rooms"]]},
+            "tiers": tiers,
+            "damage": None if damage is None else {"regions": len(damage["regions"]), "rejected": len(damage["rejected"]), "flags": len(damage["concealed_flags"])},
+        }
+        (src / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
     else:
         sys.exit(f"{src}: not a Stray Scanner export or a web capture")
     print(json.dumps(summary, indent=2, default=str))

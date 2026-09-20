@@ -1,10 +1,13 @@
 """Per-surface damage regions with class and metric extent, plus concealed-damage flags.
 
 Two detector backends, chosen at runtime:
-- "owlv2": google/owlv2-base-patch16-ensemble, open-vocabulary detection run locally
-  (Apache 2.0, ~150M params, no network after the first download). Default.
+- "owlv2": google/owlv2-base-patch16-ensemble localizes candidate regions (Apache 2.0,
+  ~150M params), then Qwen3-VL-2B-Instruct (Apache 2.0, ~4.6 GB bf16) looks at each
+  crop and answers crack / water_stain / mould / peeling_paint / none. The whole-frame
+  detector localizes well but confuses classes; the VLM decides the class and rejects
+  shadows, wiring and decor. Everything local, no network after the first download.
 - "claude": Claude vision through the Anthropic SDK when ANTHROPIC_API_KEY (or an
-  `ant auth login` profile) is present. Higher quality on subtle stains, needs network.
+  `ant auth login` profile) is present. Not used by default, costs money.
   Disclosed in the plan output as `detector`.
 
 Metric extent: a detection box in a photo becomes a region on a surface by casting the
@@ -49,7 +52,7 @@ def detector_backend() -> str:
     return "owlv2"
 
 
-def detect_owlv2(image_paths: list[str], threshold: float = 0.25) -> dict[str, list[dict]]:
+def detect_owlv2(image_paths: list[str], threshold: float = 0.25, verify: bool = True) -> dict[str, list[dict]]:
     """Open-vocabulary detection. Returns per image a list of {class, score, box} with box in
     normalized [x0, y0, x1, y1] image coordinates."""
     import torch
@@ -88,6 +91,55 @@ def detect_owlv2(image_paths: list[str], threshold: float = 0.25) -> dict[str, l
     del model
     if device == "cuda":
         torch.cuda.empty_cache()
+    if verify:
+        results = verify_with_vlm(results)
+    return results
+
+
+VLM_ID = "Qwen/Qwen3-VL-2B-Instruct"
+VLM_PROMPT = (
+    "This is a close crop from a photo of an interior wall, floor or ceiling. "
+    "Does it show building damage? Answer with exactly one word from: crack, water_stain, mould, peeling_paint, none. "
+    "Shadows, wiring, sockets, furniture, decor, tiles, wood grain and normal paint texture are none."
+)
+
+
+def verify_with_vlm(results: dict[str, list[dict]], margin: float = 0.2) -> dict[str, list[dict]]:
+    """Second stage: a small vision-language model classifies each candidate crop.
+    Regions the model calls none are dropped, the others take the model's class."""
+    import torch
+    from PIL import Image
+    from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+
+    if not any(results.values()):
+        return results
+    model = Qwen3VLForConditionalGeneration.from_pretrained(VLM_ID, dtype=torch.bfloat16, device_map="cuda", attn_implementation="sdpa").eval()
+    processor = AutoProcessor.from_pretrained(VLM_ID)
+    for path, found in results.items():
+        image = Image.open(path).convert("RGB")
+        w, h = image.size
+        kept = []
+        for f in found:
+            x0, y0, x1, y1 = f["box"]
+            bw, bh = x1 - x0, y1 - y0
+            crop = image.crop((int(max(0, x0 - margin * bw) * w), int(max(0, y0 - margin * bh) * h), int(min(1, x1 + margin * bw) * w), int(min(1, y1 + margin * bh) * h)))
+            if min(crop.size) < 32:
+                continue
+            crop.thumbnail((896, 896))
+            messages = [{"role": "user", "content": [{"type": "image", "image": crop}, {"type": "text", "text": VLM_PROMPT}]}]
+            inputs = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt").to("cuda")
+            with torch.no_grad():
+                out = model.generate(**inputs, max_new_tokens=6, do_sample=False)
+            answer = processor.batch_decode(out[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0].strip().lower()
+            answer = answer.replace(" ", "_").strip(".,")
+            f["vlm_answer"] = answer
+            f["detector_class"] = f["class"]
+            if answer in CLASSES:
+                f["class"] = answer
+                kept.append(f)
+        results[path] = kept
+    del model
+    torch.cuda.empty_cache()
     return results
 
 
@@ -313,7 +365,7 @@ def scope_items(rooms: list[dict], regions: list[dict]) -> list[dict]:
     return items
 
 
-MIN_SCORE = {"owlv2": 0.40, "claude": 0.5}
+MIN_SCORE = {"owlv2": 0.25, "claude": 0.5}  # owlv2 candidates are gated by the VLM, not the score
 MIN_SIDE_CM = 8.0  # anything smaller is a speck or a shadow edge, not a damage region
 
 
@@ -330,7 +382,7 @@ def run_damage(image_paths: list[str], photo_poses, rooms, floor_y, ceiling_y, d
             reasons.append("too small")
         (rejected if reasons else regions).append({**r, "rejected": reasons} if reasons else r)
     return {
-        "detector": {"backend": backend, "model": "claude-opus-5" if backend == "claude" else "google/owlv2-base-patch16-ensemble"},
+        "detector": {"backend": backend, "model": "claude-opus-5" if backend == "claude" else f"google/owlv2-base-patch16-ensemble + {VLM_ID}"},
         "raw_detections": {Path(k).name: v for k, v in detections.items()},
         "regions": regions,
         "rejected": rejected,
