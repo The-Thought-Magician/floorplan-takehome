@@ -7,4 +7,5 @@ export HF_HUB_DISABLE_XET=1
 uv run hf download facebook/VGGT-1B model.safetensors config.json
 uv run hf download Ruicheng/moge-2-vitl
 uv run hf download google/owlv2-base-patch16-ensemble
+uv run hf download Qwen/Qwen3-VL-2B-Instruct
 echo "weights ready"

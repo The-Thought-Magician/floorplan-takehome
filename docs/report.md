@@ -42,15 +42,15 @@ Honest accuracy per tier, measured so far (see docs/benchmark.md):
 | tier | walls | ceiling | basis |
 |---|---|---|---|
 | LiDAR | not measured (no tape on the sample flats), bands 3 to 8 cm thick | 294 and 308 cm found per room where the ceiling was scanned | 3 Cozmo sample scans |
-| depth (Android, TECNO LI9) | -1.3 and +1.8 percent after the fix loop (-8 and -14 before) | -11 cm | one tape-measured bedroom |
-| video | -3 to -15 percent | not found | same bedroom, ARCore-depth anchor |
-| photos, with poses | -7 to -9 percent | not found | same bedroom, ARCore-depth anchor |
-| photos, no poses | -12 and -14 percent | not found | same bedroom, MoGe-2 anchor, no EXIF |
+| depth (Android, TECNO LI9) | -1.3/+1.8 percent on the fix-loop capture; +2.8/+1.5 percent on the later closed capture | not found | one tape-measured bedroom |
+| video | -4.6/-2.6 percent on the best capture, -14.6/-11.6 percent on another | not found | same bedroom |
+| photos, with poses/FOV | -2.6/-3.8 percent on the best capture, worse on close/sparse captures | not found | same bedroom |
+| photos, no poses | -7.4 and -8.9 percent | not found | same bedroom, MoGe-2 anchor |
 
-No tier passes the 1.5 cm ceiling gate or the 1 percent wall gate. The depth
-tier is within 2 percent after the fix loop on the one tape-measured room. The
-view-model tiers are limited by scale recovery, not geometry: their aspect
-ratios are within 2 percent of the tape.
+No tier passes the 1.5 cm ceiling gate or the 1 percent wall gate on the current
+bedroom set. The depth tier is within 2 percent on the fix-loop capture and
+misses by 2.8 percent on the later closed capture. The view-model tiers are
+limited mostly by scale recovery and frame coverage.
 
 ## 3. Drift handling
 
@@ -72,9 +72,8 @@ Where the centimetres go, largest first:
 1. Scale, view-model tiers: VGGT is relative. Poses fix it when they exist; on a
    rotate-in-place capture the pose fit was 40 percent off, on a walking capture
    the per-chunk fit is within 10 to 15 percent. Without poses MoGe-2 anchors
-   the scale: within 2 percent of the tape on frames that see a whole wall, 10
-   to 25 percent low on close-ups, 12 to 14 percent low overall on the bedroom
-   without EXIF field of view.
+   the scale: within a few percent on frames that see a whole wall, and worse
+   on close-ups or sparse captures.
 2. Depth fill on textureless surfaces (ARCore): smooth depth invents flat
    surfaces on ceilings and floors. Detected and rejected by plane tilt, but it
    removes the ceiling from the depth tier entirely.
@@ -105,8 +104,8 @@ the room, so the fitted wall line sits inside the true wall. Fix: for wall
 bands thicker than 15 cm, place the wall at the 80th percentile of the band's
 outward spread. Predicted within 3 percent; measured -1.3 and +1.8 percent.
 LiDAR bands are thin, so LiDAR rooms did not move. The percentile was set on
-the same capture it was tested on, and no second closed capture exists yet to
-check it, which the fix-loop page states.
+the same capture it was first tested on. A later closed bedroom capture reduces
+the error but still fails the 1 percent wall gate, as stated in the fix-loop page.
 
 ## 6a. Damage detection
 

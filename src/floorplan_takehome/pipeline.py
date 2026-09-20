@@ -187,6 +187,7 @@ def process_image_tiers(capture_dir: Path, plan: dict) -> dict:
         photo_fov_x,
         photo_paths_and_poses,
         reconstruct_images,
+        release_vggt,
         video_frame_paths,
     )
 
@@ -207,21 +208,24 @@ def process_image_tiers(capture_dir: Path, plan: dict) -> dict:
     elif frames:
         jobs.append(("video", frames, {}))
 
-    for tier, paths, known in jobs:
-        try:
-            cache = capture_dir / f"vggt_{tier}.npz"
-            # video frames share the photos' camera, so the photos' FOV applies to every image
-            fov_all = {i: (fov.get(i) if i < len(photos) else (np.median(list(fov.values())) if fov else None)) for i in range(len(paths))}
-            fov_all = {i: f for i, f in fov_all.items() if f}
-            cloud, cameras, info = reconstruct_images(paths, known, cache=cache, fov_x=fov_all)
-            check = depth_scale_check(capture_dir, paths, cache)
-            if check:
-                info["arcore_depth_scale_check"] = check  # diagnostic only, measured 8 percent far
-            tier_plan = reconstruct_multiroom(cloud, tier, cameras)
-            _write_plan(tier_plan, cloud, cameras, capture_dir, tier, info)
-            tiers[tier] = _tier_summary(tier_plan, info)
-        except Exception as e:  # noqa: BLE001, surfaced in the plan
-            tiers[tier] = {"error": f"{type(e).__name__}: {e}"}
+    try:
+        for tier, paths, known in jobs:
+            try:
+                cache = capture_dir / f"vggt_{tier}.npz"
+                # video frames share the photos' camera, so the photos' FOV applies to every image
+                fov_all = {i: (fov.get(i) if i < len(photos) else (np.median(list(fov.values())) if fov else None)) for i in range(len(paths))}
+                fov_all = {i: f for i, f in fov_all.items() if f}
+                cloud, cameras, info = reconstruct_images(paths, known, cache=cache, fov_x=fov_all, release_model=False)
+                check = depth_scale_check(capture_dir, paths, cache)
+                if check:
+                    info["arcore_depth_scale_check"] = check  # diagnostic only, measured 8 percent far
+                tier_plan = reconstruct_multiroom(cloud, tier, cameras)
+                _write_plan(tier_plan, cloud, cameras, capture_dir, tier, info)
+                tiers[tier] = _tier_summary(tier_plan, info)
+            except Exception as e:  # noqa: BLE001, surfaced in the plan
+                tiers[tier] = {"error": f"{type(e).__name__}: {e}"}
+    finally:
+        release_vggt()
 
     plan["tiers"] = tiers
     (capture_dir / "plan.json").write_text(json.dumps(plan, indent=2))
@@ -419,6 +423,9 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
 
 def run_damage_for_capture(capture_dir: Path, plan: dict, backend: str | None = None) -> dict | None:
     """Damage regions on the photos of a web capture (poses and depth per photo)."""
+    if not any(r.get("polygon_cm") for r in plan.get("rooms", [])):
+        return None
+
     from floorplan_takehome.damage import run_damage
     from floorplan_takehome.depth_capture import _depth_grid
 

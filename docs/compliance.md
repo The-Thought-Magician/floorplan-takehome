@@ -38,11 +38,11 @@ the benchmark capture), not attempted.
 | Multi-room capture, 3+ rooms plus connector | data/sample/single_scan_with_ceiling (Cozmo sample), user capture pending | plan.json | partial: sample has no ground truth |
 | Furnished room with staged damage in two classes | not stageable in the available room; Cozmo's single_room sample has a real crack, used as the damage test | data/sample/single_room/damage.json | partial |
 | Same rooms at all three tiers | pipeline.py `process_stray_scan` runs all three on one scan | summary.json | done on samples, pending on user rooms |
-| One room captured twice, same tier | 8 bedroom captures at the depth tier, 1 closes; 2 at the photo tier agree within 3.9 percent | docs/benchmark.md repeatability | partial: FAIL, the finding is that sparse captures do not close |
+| One room captured twice, same tier | bedroom captures at depth, photo and video tiers; two depth captures close | docs/benchmark.md repeatability | partial: FAIL, best depth repeat is 4.0 percent, sparse captures often do not close |
 | Laser or tape ground truth, raw data submitted | data/ground_truth/*.json, data/captures, data/sample | files | partial: one room so far |
 | Opening widths gate (2 cm on 85 percent) | scripts/benchmark.py | docs/benchmark.md | FAIL on the bedroom: 1 of 2 detected, 0 within 2 cm |
 | Ceiling height gate (1.5 cm, spread 1 cm) | scripts/benchmark.py | docs/benchmark.md | FAIL on bedroom (-10.6 cm at depth tier) |
-| Repeatability gate (1 cm or 0.5 percent) | scripts/benchmark.py | docs/benchmark.md | pending second capture |
+| Repeatability gate (1 cm or 0.5 percent) | scripts/benchmark.py | docs/benchmark.md | FAIL on bedroom repeats |
 | Drift accountability with on/off ablation | drift.py, pipeline.py | plan.json diagnostics.drift, plan_depth_drift_off.png, docs/benchmark.md | done (yaw correction, orientation only) |
 | Photo-tier whole-property stitch, no overlaps, footprint within 8 percent | multiview.py, rooms.py | plan_photos.json | partial: needs poses or per-room folders with doorway overlap |
 | Calibration scored at every tier | intervals.py, data/calibration.json (not yet written) | interval_basis | partial: priors only |
@@ -75,8 +75,8 @@ the benchmark capture), not attempted.
 | Repo, README to first plan in 15 minutes, one command | README.md, scripts/setup.sh, scripts/floorplan.py | done, untested on a clean machine |
 | Reproduction bundle | scripts/fetch_weights.sh, cached VGGT outputs (vggt_*.npz) replay deterministically, live path is the same command | done |
 | Benchmark report | scripts/benchmark.py, docs/benchmark.md | generated, ground truth pending |
-| Fix loop bundle | docs/fix-loop.md | pending |
-| Technical report, 6 pages | docs/report.md | pending |
+| Fix loop bundle | docs/fix-loop.md | done |
+| Technical report, 6 pages | docs/report.md | draft, numbers matched to benchmark |
 | Raw benchmark data | data/ (sensor logs, ground truth, app exports) | partial |
 
 ## Constraints

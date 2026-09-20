@@ -73,17 +73,18 @@ Done and committed:
 - Ops: FastAPI backend, one-command CLI (scripts/floorplan.py), setup and weight
   scripts, benchmark report generator, compliance matrix, protocol, report draft.
 
-Measured: bedroom depth tier 421 x 372 cm vs 427 x 366 after the fix, ceiling
-302 vs 312 (wall extent, ceiling never seen). Poseless photo tier 378 x 316.
-No gate passed. LiDAR tier on the samples segments 3, 6 and 5 rooms.
+Measured: bedroom depth tier 421 x 372 cm vs 427 x 366 on the fix-loop capture,
+and 439 x 371 on a later closed repeat. Ceiling is not observed on the bedroom
+captures. Poseless photo tier is 395 x 333. No gate passed. LiDAR tier on the
+samples segments 3, 6 and 5 rooms.
 
 Environment gotchas: TORCH_COMPILE_DISABLE=1 and TORCH_DISABLE_NATIVE_JIT=1 are
 set in the package __init__ (no Python headers, Triton JIT fails); torch must be
 imported after the package. HF_HUB_DISABLE_XET=1 for downloads.
 
 Pending and blocked on the user: no more rooms, no staged damage, no CubiCasa scan,
-no API key (user's decision on 2026-09-20). Repeatability uses the two bedroom
-captures, the second of which does not close. Still to do without user input:
+no API key (user's decision on 2026-09-20). Repeatability uses the bedroom
+captures and fails when two depth captures close. Still to do without user input:
 technical report final pass, clean-machine setup test, calibration once a second
 tape-measured room exists.
 

@@ -84,7 +84,9 @@ data/                     captures (not tracked in git)
 
 ## Status
 
-All three tiers run end to end on a real Android phone capture. Depth tier
-from ARCore, photo and video tiers through VGGT on the local GPU, scaled with
-the recorded ARCore poses. Scale agreement between tiers is the open issue,
-see docs/plan.md.
+All three tiers run end to end on real Android captures. Depth tier comes from
+ARCore. Photo and video tiers run through VGGT on the local GPU, with scale from
+a printed marker when present, otherwise MoGe-2 with camera field of view or
+recorded poses. The benchmark is deliberately honest: some captures do not
+close a polygon, no ceiling gate passes, and repeatability fails on the current
+bedroom set. See docs/benchmark.md and docs/plan.md.

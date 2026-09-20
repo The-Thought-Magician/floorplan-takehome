@@ -149,6 +149,7 @@ def reconstruct_images(
     conf_percentile: float = 30.0,
     cache: Path | None = None,
     fov_x: dict[int, float] | None = None,
+    release_model: bool = True,
 ) -> tuple[o3d.geometry.PointCloud, np.ndarray, dict]:
     """Images to a point cloud plus camera centres.
 
@@ -157,7 +158,8 @@ def reconstruct_images(
     that world frame.
     """
     out = run_vggt(image_paths, cache)
-    release_vggt()
+    if release_model:
+        release_vggt()
     centers = camera_centers_from_extrinsics(out["extrinsic"])
     keep = out["conf"] >= np.percentile(out["conf"], conf_percentile)
     points = out["points"][keep]
@@ -561,7 +563,7 @@ def marker_scale(image_paths: list[str], out: dict, side_m: float = MARKER_SIDE_
 
     detector = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50), cv2.aruco.DetectorParameters())
     pts = out["points"]
-    s, h, w, _ = pts.shape
+    _, h, w, _ = pts.shape
     ratios = []
     for i, path in enumerate(image_paths):
         img = cv2.imread(path)

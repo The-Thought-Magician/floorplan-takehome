@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 import zipfile
+from copy import deepcopy
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
@@ -40,6 +41,11 @@ def _set(capture_id: str, **fields) -> None:
     with _lock:
         _status.setdefault(capture_id, {"id": capture_id})
         _status[capture_id].update(fields)
+
+
+def _publish_plan(plan: dict) -> dict:
+    """Snapshot a plan before exposing it to polling clients."""
+    return deepcopy(plan)
 
 
 CAPTURE_ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
@@ -84,7 +90,7 @@ def _run(capture_id: str, capture_dir: Path) -> None:
     _set(capture_id, state="processing", started=time.time())
     try:
         plan = process_capture_dir(capture_dir)
-        _set(capture_id, state="done", plan=plan, finished=time.time(), tiers_state="running")
+        _set(capture_id, state="done", plan=_publish_plan(plan), finished=time.time(), tiers_state="running")
         with _tier_lock:  # one GPU job at a time
             process_image_tiers(capture_dir, plan)
             try:
@@ -92,7 +98,7 @@ def _run(capture_id: str, capture_dir: Path) -> None:
             except Exception as e:
                 log.exception("damage detection failed for %s", capture_id)
                 plan["damage"] = {"error": f"{type(e).__name__}: {e}"}
-        _set(capture_id, plan=plan, tiers_state="done")
+        _set(capture_id, plan=_publish_plan(plan), tiers_state="done")
     except Exception as e:
         log.exception("processing failed for %s", capture_id)
         _set(capture_id, state="failed", error=f"{type(e).__name__}: {e}", finished=time.time())

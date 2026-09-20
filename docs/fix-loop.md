@@ -57,11 +57,13 @@ sample rooms unchanged.
 | area | 12.34 m2 | 15.68 m2 | 15.61 m2 |
 | LiDAR sample shifts | n/a | all zero (bands under 15 cm) | |
 
-Prediction held. The gate itself (1 percent) is still not met: the residual
-sits in the choice of percentile, which was set from this one capture. It has
-not been validated on a second room, and the report says so. The second
-bedroom capture (`20260920-034122-7a3481`, 8 usable depth frames) does not
-close a polygon in either mode, so it cannot serve as the check.
+Prediction held on the original fix-loop capture. The gate itself (1 percent)
+is still not met: the residual sits in the choice of percentile, which was set
+from this one capture. A later closed bedroom capture
+(`20260920-135411-18977b`) measures +2.8 percent and +1.5 percent on the depth
+tier, so the held-out check fails the 1 percent wall gate even though it is far
+better than the pre-fix -7.9 and -14.2 percent case. Sparse captures still do
+not close a polygon and remain unscored.
 
 ## 5. Regenerate
 
