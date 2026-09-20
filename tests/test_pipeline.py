@@ -108,3 +108,15 @@ def test_video_can_be_uploaded_separately(tmp_path, monkeypatch):
     assert res.status_code == 200 and res.json()["video_bytes"] == 10
     assert (tmp_path / "captures" / capture_id / "video.webm").read_bytes() == b"webm bytes"
     assert client.post("/api/captures/nope/video", files={"file": ("v.webm", b"x", "video/webm")}).status_code == 404
+
+
+def test_files_only_upload_gets_an_empty_depth_plan(tmp_path):
+    d = tmp_path / "cap"
+    (d / "photos" / "kitchen").mkdir(parents=True)
+    (d / "capture.json").write_text(json.dumps({"captures": [], "upload": {"kind": "files"}}))
+    (d / "photos" / "kitchen" / "0000.jpg").write_bytes(b"x")
+    from floorplan_takehome.pipeline import process_capture_dir
+
+    plan = process_capture_dir(d)
+    assert plan["rooms"] == [] and plan["capture"]["kind"] == "files"
+    assert plan["capture"]["photos"] == ["photos/kitchen/0000.jpg"]

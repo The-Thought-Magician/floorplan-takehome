@@ -170,12 +170,15 @@ def process_image_tiers(capture_dir: Path, plan: dict) -> dict:
     capture_dir = Path(capture_dir)
     tiers = {}
     photos, centers = photo_paths_and_poses(capture_dir)
+    if not photos:  # files-only upload: any images under photos/, no poses
+        photos = sorted(str(p) for p in (capture_dir / "photos").rglob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png"))
+        centers = {}
     frames = video_frame_paths(capture_dir)
 
     jobs = []
-    if len(photos) >= 3:
+    if len(photos) >= 2:
         jobs.append(("photos", photos, centers))
-    if frames and len(photos) >= 3:
+    if frames and len(centers) >= 3:
         jobs.append(("video", photos + frames, centers))
     elif frames:
         jobs.append(("video", frames, {}))
@@ -197,10 +200,8 @@ def process_image_tiers(capture_dir: Path, plan: dict) -> dict:
                 info["scale_used"] = "arcore_depth"
                 info["pose_scale"] = info["scale"]
                 info["scale"] = check["depth_based_scale"]
-            tier_plan = reconstruct(cloud, source_tier=tier, cameras=cameras)
-            o3d.io.write_point_cloud(str(capture_dir / f"cloud_{tier}.ply"), clean_cloud(cloud))
-            render_topdown(clean_cloud(cloud), tier_plan, capture_dir / f"plan_{tier}.png", cameras)
-            (capture_dir / f"plan_{tier}.json").write_text(json.dumps(tier_plan, indent=2))
+            tier_plan = reconstruct_multiroom(cloud, tier, cameras)
+            _write_plan(tier_plan, cloud, cameras, capture_dir, tier)
             tiers[tier] = _tier_summary(tier_plan, info)
         except Exception as e:  # noqa: BLE001, surfaced in the plan
             tiers[tier] = {"error": f"{type(e).__name__}: {e}"}
@@ -214,6 +215,19 @@ def process_capture_dir(capture_dir: Path) -> dict:
     """Run the depth tier on an unpacked capture and write plan.json, plan.png, cloud.ply."""
     capture_dir = Path(capture_dir)
     json_path = capture_dir / "capture.json"
+    data = json.loads(json_path.read_text())
+    if not data.get("captures"):  # files-only upload: photos and/or a video, no depth frames
+        plan = {
+            "rooms": [],
+            "diagnostics": None,
+            "capture": {
+                "kind": "files",
+                "photos": sorted(str(p.relative_to(capture_dir)) for p in (capture_dir / "photos").rglob("*") if p.is_file()),
+                "video": next((p.name for p in capture_dir.glob("video.*")), None),
+            },
+        }
+        (capture_dir / "plan.json").write_text(json.dumps(plan, indent=2))
+        return plan
     cloud = load_point_cloud(str(json_path))
     cameras = camera_positions(json_path)
     plan = reconstruct(cloud, source_tier="depth", cameras=cameras)

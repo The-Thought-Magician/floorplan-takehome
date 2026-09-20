@@ -45,6 +45,8 @@ def _safe_extract(zip_path: Path, dest: Path) -> None:
         zf.extractall(dest)
     if not (dest / "capture.json").exists():
         raise HTTPException(400, "zip has no capture.json")
+    if sum(p.stat().st_size for p in dest.rglob("*") if p.is_file()) > 4 * MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "zip expands too large")
 
 
 def _run(capture_id: str, capture_dir: Path) -> None:

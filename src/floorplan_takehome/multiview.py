@@ -190,15 +190,18 @@ def video_frame_paths(capture_dir: Path, fps: float = 1.0) -> list[str]:
     import subprocess
 
     frames_dir = capture_dir / "frames"
-    video = capture_dir / "video.webm"
-    if not video.exists():
+    video = next((p for p in capture_dir.glob("video.*")), None)
+    if video is None:
         return []
     if not frames_dir.exists() or not any(frames_dir.glob("*.jpg")):
         frames_dir.mkdir(exist_ok=True)
-        subprocess.run(
+        # ffmpeg applies the container rotation tag, so portrait phone video comes out upright
+        result = subprocess.run(
             ["ffmpeg", "-v", "error", "-y", "-i", str(video), "-vf", f"fps={fps}", "-q:v", "2", str(frames_dir / "%04d.jpg")],
-            check=True,
+            capture_output=True,
         )
+        if result.returncode != 0:
+            return []
     return sorted(str(p) for p in frames_dir.glob("*.jpg"))
 
 

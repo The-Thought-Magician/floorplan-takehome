@@ -41,6 +41,19 @@
     <button id="export" disabled>export zip</button>
     <button id="upload" disabled>upload + process</button>
   </div>
+  <details id="files-fallback">
+    <summary>no AR on this phone? upload photos or a video instead</summary>
+    <div>
+      <label>room name <input id="room-name" type="text" value="room" size="10"></label>
+    </div>
+    <div>
+      <label>photos <input id="file-photos" type="file" accept="image/*" multiple></label>
+    </div>
+    <div>
+      <label>video <input id="file-video" type="file" accept="video/*"></label>
+    </div>
+    <button id="upload-files">upload files + process</button>
+  </details>
   <div id="result"></div>
   <div id="log"></div>
 </div>
@@ -49,7 +62,7 @@
 <canvas id="photo-canvas"></canvas>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-const PAGE_VERSION = 7;
+const PAGE_VERSION = 8;
 const GRID_X = 20;          // coarse getDepthInMeters grid, kept as a decode cross-check
 const GRID_Y = 15;
 const VIDEO_FRAME_STRIDE = 2;   // draw every 2nd XR frame into the video (about 15 fps)
@@ -416,29 +429,33 @@ async function uploadZip() {
   if (!created) return;
   const { id } = created;
   log('uploaded as ' + id + ', processing');
-  let depthShown = false;
   if ($('opt-video').checked && recordedChunks.length) {
     const video = new Blob(recordedChunks, { type: videoMime });
     log('uploading video ' + (video.size / 1e6).toFixed(1) + ' MB');
     postFile('/api/captures/' + id + '/video', video, 'video.webm').then((r) => { if (r) log('video stored'); });
   }
+  await pollResult(id);
+}
+
+async function pollResult(id) {
+  let depthShown = false;
   for (let i = 0; i < 400; i++) {
     await new Promise((r) => setTimeout(r, 1500));
     const status = await (await fetch('/api/captures/' + id)).json();
     if (status.state === 'done' && !depthShown) {
       depthShown = true;
       const room = status.plan.rooms[0];
-      const summary = room.polygon_cm.length
+      const summary = room && room.polygon_cm && room.polygon_cm.length
         ? 'area ' + room.area_m2 + ' m2, walls ' + room.wall_lengths_cm.join(' / ') + ' cm'
-        : 'no closed polygon, walls found: ' + status.plan.diagnostics.walls;
+        : 'no closed polygon' + (status.plan.diagnostics ? ', walls found: ' + status.plan.diagnostics.walls : '');
       log('depth tier: ' + summary);
-      $('result').innerHTML = '<img src="/api/captures/' + id + '/plan.png?t=' + Date.now() + '">';
+      if (status.plan.diagnostics) $('result').innerHTML = '<img src="/api/captures/' + id + '/plan.png?t=' + Date.now() + '">';
       if (status.tiers_state) log('photo/video tiers running on the GPU, this takes a minute');
     }
     if (status.state === 'done' && (!status.tiers_state || status.tiers_state === 'done')) {
       for (const [tier, t] of Object.entries(status.plan.tiers || {})) {
-        log(tier + ' tier: ' + (t.error ? t.error : (t.closed ? 'area ' + t.area_m2 + ' m2, walls ' + t.wall_lengths_cm.join(' / ') + ' cm' : 'not closed, walls ' + t.walls)
-          + (t.scale ? ', scale ' + t.scale + ', camera fit ' + t.camera_residual_cm_median + ' cm' : '') + ', vram ' + t.peak_vram_gb + ' GB'));
+        log(tier + ' tier: ' + (t.error ? t.error : (t.closed ? 'area ' + JSON.stringify(t.area_m2) + ' m2, walls ' + JSON.stringify(t.wall_lengths_cm) + ' cm' : 'not closed'))
+          + (t.scale ? ', scale ' + t.scale : ', relative scale only') + (t.peak_vram_gb ? ', vram ' + t.peak_vram_gb + ' GB' : ''));
         if (!t.error) $('result').innerHTML += '<img src="/api/captures/' + id + '/plan.png?tier=' + tier + '&t=' + Date.now() + '">';
       }
       return;
@@ -448,6 +465,25 @@ async function uploadZip() {
   log('timed out waiting for result');
 }
 
+async function uploadFiles() {
+  const photos = Array.from($('file-photos').files || []);
+  const video = ($('file-video').files || [])[0];
+  if (!photos.length && !video) { log('pick photos or a video first'); return; }
+  const room = ($('room-name').value || 'room').replace(/[^a-z0-9_-]/gi, '_');
+  const ext = (f, fallback) => ((f.name.match(/\.[a-z0-9]+$/i) || [fallback])[0]).toLowerCase();
+  const zip = new JSZip();
+  zip.file('capture.json', JSON.stringify({ meta: await deviceMeta(), captures: [], upload: { kind: 'files', room } }));
+  photos.forEach((f, i) => zip.file('photos/' + room + '/' + String(i).padStart(4, '0') + ext(f, '.jpg'), f));
+  if (video) zip.file('video' + ext(video, '.mp4'), video);
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+  log('uploading ' + (blob.size / 1e6).toFixed(1) + ' MB, ' + photos.length + ' photos' + (video ? ' + video' : ''));
+  const created = await postFile('/api/captures', blob, 'capture.zip');
+  if (!created) return;
+  log('uploaded as ' + created.id + ', processing on the GPU');
+  await pollResult(created.id);
+}
+
+$('upload-files').addEventListener('click', () => uploadFiles().catch((e) => log('upload failed: ' + e.message)));
 $('start').addEventListener('click', start);
 $('capture').addEventListener('click', () => { if (!latestFrame) log('no frame data yet'); else pendingPhoto = true; });
 $('record').addEventListener('click', () => {
