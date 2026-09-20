@@ -115,8 +115,17 @@ def room_heights(points: np.ndarray, corners_xz: np.ndarray, floor_hint: float, 
     centers = (edges[:-1] + edges[1:]) / 2
     near_floor = np.abs(centers - floor_hint) < 0.25
     floor = float(centers[near_floor][np.argmax(hist[near_floor])]) if near_floor.any() and hist[near_floor].max() > 20 else None
-    high = centers > (floor if floor is not None else floor_hint) + 2.0
-    ceiling = float(centers[high][np.argmax(hist[high])]) if high.any() and hist[high].max() > 20 else None
+    base = floor if floor is not None else floor_hint
+    high = centers > base + 2.0
+    ceiling = None
+    if high.any() and hist[high].max() > 20:
+        idx = np.flatnonzero(high)[np.argmax(hist[high])]
+        # a ceiling is a layer: far denser than the wall band in the metre below it, and
+        # nothing much above it. The top of a wall that was never scanned higher fails both.
+        below = hist[(centers > centers[idx] - 1.0) & (centers < centers[idx] - 0.2)]
+        above = hist[centers > centers[idx] + 0.15]
+        if len(below) and hist[idx] >= 3 * np.median(below) and above.sum() <= 0.2 * hist[idx]:
+            ceiling = float(centers[idx])
     return floor, ceiling
 
 

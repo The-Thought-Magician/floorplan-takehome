@@ -62,3 +62,19 @@ def test_wall_openings_finds_a_door_and_a_window():
     door_o = next(o for o in found if o["kind"] == "door")
     window_o = next(o for o in found if o["kind"] == "window")
     assert abs(door_o["width_cm"] - 90) <= 10 and abs(window_o["width_cm"] - 120) <= 10
+
+
+def test_room_heights_rejects_the_top_of_an_unscanned_wall_as_ceiling():
+    from floorplan_takehome.rooms import room_heights
+
+    rng = np.random.default_rng(4)
+    corners = np.array([[0, 0], [4, 0], [4, 3], [0, 3]], dtype=float)
+    # walls scanned only up to 2.1 m, no ceiling points at all
+    pts = _box_points(0, 4, 0, 3, height=2.1, rng=rng)
+    floor, ceiling = room_heights(pts, corners, floor_hint=0.0)
+    assert abs(floor) < 0.03 and ceiling is None
+    # now add a real ceiling layer at 2.7 m and walls up to it
+    full = _box_points(0, 4, 0, 3, height=2.7, rng=rng)
+    ceil_pts = np.stack([rng.uniform(0, 4, 6000), np.full(6000, 2.7) + rng.normal(0, 0.01, 6000), rng.uniform(0, 3, 6000)], axis=1)
+    floor, ceiling = room_heights(np.concatenate([full, ceil_pts]), corners, floor_hint=0.0)
+    assert ceiling is not None and abs(ceiling - 2.7) < 0.03
