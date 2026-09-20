@@ -51,7 +51,7 @@ the benchmark capture), not attempted.
 
 | requirement | file | artifact | status |
 |---|---|---|---|
-| Consumer app on 2 rooms, table of errors | docs/report.md | magicplan export + table | pending (magicplan on Android) |
+| Consumer app on 2 rooms, table of errors | docs/report.md | CubiCasa LITE export + table (magicplan cannot scan on Android) | pending (user scan) |
 
 ## Part 4: fix loop
 

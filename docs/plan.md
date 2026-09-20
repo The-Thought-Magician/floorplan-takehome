@@ -25,10 +25,14 @@ ablation mandatory, photo tier whole-property stitch within 8 percent, video
 ## 2. Situation and decisions
 
 - No iPhone. Capture route is Route 2, stock apps: Stray Scanner for LiDAR
-  (the format Cozmo's own samples use), Camera app for photos and video,
-  magicplan on Android for the head-to-head. Polycam is not usable from
-  Android: photo mode only, no dimensioned plan, exports paywalled; its
-  dimension features need iPhone LiDAR.
+  (the format Cozmo's own samples use), Camera app for photos and video.
+  Head-to-head app: magicplan on iPhone, CubiCasa LITE on Android. Checked on
+  2026-09-20 against the vendors' help centres and store reviews: magicplan
+  does not scan on Android at all (manual drawing only), Polycam's dimensioned
+  modes need iPhone LiDAR, CubiCasa LITE measures from a video walk on Android
+  12+ ARCore phones and returns a free dimensioned PNG/JPG. iPhone magicplan
+  users report walls 4 to 8 inches off; CubiCasa claims 2 to 3 percent with
+  independent tests showing 3 to 17 inch errors.
 - Benchmark data: Cozmo's three Stray Scanner scans (single_room is 3 rooms,
   single_scan_floor_only 6, single_scan_with_ceiling 5 plus corridor, no tape),
   and eight captures of the user's bedroom from an Android TECNO LI9 through the
@@ -239,7 +243,7 @@ repo.
 ## 12. Open items
 
 Needs the user: door and window widths for the openings gate; a second bedroom
-capture that closes, for repeatability; magicplan scan for the head-to-head.
+capture that closes, for repeatability; a CubiCasa LITE scan for the head-to-head.
 The marker test is not possible for the user. Needs no one: clean-machine
 timing of scripts/setup.sh, final report read against docs/benchmark.md, a look
 at the six floor stain calls. Not built: whole-property stitching of per-room

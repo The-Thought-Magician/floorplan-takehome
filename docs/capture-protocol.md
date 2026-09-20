@@ -10,10 +10,14 @@ Every tier ends with a folder handed to the pipeline, one command per capture.
 | LiDAR | Stray Scanner (App Store) | iPhone 12 Pro or newer Pro, iPad Pro | free |
 | Video | built-in Camera app | iPhone 15 or newer | none |
 | Photos | built-in Camera app | iPhone 15 or newer | none |
-| Head-to-head | magicplan (App Store, Play Store) | same device | free tier |
+| Head-to-head, iPhone | magicplan (App Store) | iPhone, scan features are iOS only | 2 free projects with export |
+| Head-to-head, Android | CubiCasa (Play Store), LITE plan | Android 12+, ARCore certified | free dimensioned PNG/JPG |
 
-Polycam is not an alternative for the head-to-head from Android: its dimensioned
-Space and Floorplan modes need iPhone LiDAR, and Android has photo mode only.
+magicplan on Android cannot scan (its help centre: scan features are not
+supported on Android, rooms are drawn by hand), so it is not a comparison on
+Android. Polycam's dimensioned modes need iPhone LiDAR and Android has photo
+mode only. CubiCasa LITE is the one Android app that measures from a scan and
+exports a dimensioned plan for free; it processes in the cloud, allow 6 to 24 h.
 
 Android phones with ARCore can also do the depth tier through the web capture
 page served by the pipeline (Chrome, no install). That path is described in
@@ -88,12 +92,21 @@ The plan then inherits the measurement's error.
 4. Put each room's photos in its own folder named after the room
    (`bedroom/`, `kitchen/`, `hall/`). Original quality, HEIC or JPEG.
 
-## Head-to-head: magicplan
+## Head-to-head
 
-1. magicplan, new project, add room, follow the app's corner-by-corner scan
-   for each of the two benchmark rooms.
-2. Export the plan as PDF and the project as JSON or CSV if the plan allows.
-   Note the app version shown in Settings.
+iPhone: magicplan, new project, add room, follow the corner-by-corner scan for
+each of the two benchmark rooms. Export the Sketch PDF (it carries dimensions)
+and note the version under settings.
+
+Android: CubiCasa, create an account, choose the LITE floor plan, scan each of
+the two rooms with the guided video walk (keep the phone upright, walk the
+perimeter, include every corner, 30 to 60 seconds per room), submit. The
+dimensioned plan arrives by email or in the app within about a day; save the
+PNG or JPG. Note the app version. If the app refuses the device, use AR Plan 3D
+and screenshot the wall lengths it shows on screen.
+
+Either way, write the app's wall lengths into data/ground_truth as the
+head-to-head file so scripts/benchmark.py can put both error columns in one table.
 
 ## Handing the files to the pipeline
 

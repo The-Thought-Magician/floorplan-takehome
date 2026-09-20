@@ -35,7 +35,8 @@ requirement coverage in docs/compliance.md, protocol in docs/capture-protocol.md
 
 - No iPhone available. Capture route is Route 2 (stock apps): Stray Scanner for
   LiDAR (the format Cozmo's own samples use), Camera app for photos and video,
-  magicplan on Android for the head-to-head. Benchmark captures come from the
+  CubiCasa LITE on Android for the head-to-head (magicplan cannot scan on
+  Android, Polycam needs iPhone LiDAR). Benchmark captures come from the
   user's Android phone (TECNO LI9, ARCore) through the web capture page.
 - Local run is the product. Render or any hosted backend is out: no GPU on free
   tiers and the assessment forbids calling our infrastructure. The Cloudflare
@@ -80,7 +81,7 @@ Environment gotchas: TORCH_COMPILE_DISABLE=1 and TORCH_DISABLE_NATIVE_JIT=1 are
 set in the package __init__ (no Python headers, Triton JIT fails); torch must be
 imported after the package. HF_HUB_DISABLE_XET=1 for downloads.
 
-Pending and blocked on the user: no more rooms, no staged damage, no magicplan,
+Pending and blocked on the user: no more rooms, no staged damage, no CubiCasa scan,
 no API key (user's decision on 2026-09-20). Repeatability uses the two bedroom
 captures, the second of which does not close. Still to do without user input:
 technical report final pass, clean-machine setup test, calibration once a second
