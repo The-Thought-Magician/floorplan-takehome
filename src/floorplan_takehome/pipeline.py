@@ -255,7 +255,8 @@ def rooms_to_schema(rooms, floor_y, ceiling_y, wall_height_cm, source_tier: str)
                 "perimeter_m": round(sum(r.wall_lengths_m), 3),
                 "wall_height_cm": round((r.ceiling_y - r.floor_y) * 100, 1) if r.floor_y is not None and r.ceiling_y is not None else wall_height_cm,
                 "height_source": "room_layers" if r.floor_y is not None and r.ceiling_y is not None else "global",
-                "openings": [{"to": f"room-{d['to']}", "width_cm": round(d["width_m"] * 100, 1), "kind": d.get("kind", "doorway")} for d in r.doorways],
+                "openings": [{"to": f"room-{d['to']}", "width_cm": round(d["width_m"] * 100, 1), "kind": d.get("kind", "doorway")} for d in r.doorways]
+                + [dict(o, to=None) for o in r.openings],
                 "confidence": None,
                 "source_tier": source_tier,
             }

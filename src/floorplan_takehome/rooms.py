@@ -27,6 +27,72 @@ class RoomPolygon:
     doorways: list[dict] = field(default_factory=list)
     floor_y: float | None = None
     ceiling_y: float | None = None
+    openings: list[dict] = field(default_factory=list)
+
+
+def wall_openings(points: np.ndarray, corners_xz: np.ndarray, floor_y: float, ceiling_y: float | None,
+                  band_m: float = 0.20, step_m: float = 0.05, min_width_m: float = 0.45,
+                  door_low_m: float = 0.3, sill_m: float = 0.7) -> list[dict]:
+    """Doors and windows as gaps in the wall along each polygon edge.
+
+    Walk each edge in 5cm steps. At each step look at points within band_m of the wall
+    line. A step is 'open' if the wall band (door_low_m .. 2.0m) has no points. A run of
+    open steps at least min_width_m long is an opening: a door if the sill band
+    (door_low_m .. sill_m) is also empty, otherwise a window.
+    """
+    n = len(corners_xz)
+    xz = points[:, [0, 2]]
+    y = points[:, 1]
+    top = min(ceiling_y - 0.1, floor_y + 2.0) if ceiling_y else floor_y + 2.0
+    openings = []
+    for i in range(n):
+        a, b = corners_xz[i], corners_xz[(i + 1) % n]
+        edge = b - a
+        length = float(np.linalg.norm(edge))
+        if length < min_width_m:
+            continue
+        d = edge / length
+        normal = np.array([-d[1], d[0]])
+        rel = xz - a
+        along = rel @ d
+        across = rel @ normal
+        near = (np.abs(across) <= band_m) & (along >= -0.1) & (along <= length + 0.1)
+        n_steps = int(length / step_m)
+        if n_steps < 2:
+            continue
+
+        def hist(mask):
+            return np.histogram(along[mask], bins=n_steps, range=(0, length))[0]
+
+        observed = hist(near) > 0
+        full_open = hist(near & (y > floor_y + door_low_m) & (y < top)) == 0
+        upper_open = hist(near & (y > floor_y + 1.0) & (y < min(top, floor_y + 1.9))) == 0
+
+        def runs(is_open, kind):
+            j = 0
+            while j < n_steps:
+                if not is_open[j]:
+                    j += 1
+                    continue
+                k = j
+                while k < n_steps and is_open[k]:
+                    k += 1
+                width = (k - j) * step_m
+                touches_corner = j == 0 or k == n_steps
+                seen = observed[max(0, j - 2):min(n_steps, k + 2)].any()
+                if width >= min_width_m and not touches_corner and seen:
+                    openings.append({"wall": i, "kind": kind, "from_corner_cm": round(j * step_m * 100, 1), "width_cm": round(width * 100, 1)})
+                j = k
+
+        runs(full_open, "door")
+        # a window is an upper-band gap that is not already a door
+        door_cells = np.zeros(n_steps, dtype=bool)
+        for o in openings:
+            if o["wall"] == i and o["kind"] == "door":
+                j0 = int(o["from_corner_cm"] / 100 / step_m)
+                door_cells[j0 : j0 + int(o["width_cm"] / 100 / step_m)] = True
+        runs(upper_open & ~door_cells, "window")
+    return openings
 
 
 def room_heights(points: np.ndarray, corners_xz: np.ndarray, floor_hint: float, bin_m: float = 0.02) -> tuple[float | None, float | None]:
@@ -234,7 +300,8 @@ def segment_rooms(
         corners = _rotate(corners_rot, -angle)
         lengths = [float(np.linalg.norm(corners[(i + 1) % len(corners)] - corners[i])) for i in range(len(corners))]
         fy, cy = room_heights(points, corners, floor_y)
-        rooms.append(RoomPolygon(label=room_id, corners_xz=corners, area_m2=_polygon_area(corners), wall_lengths_m=lengths, floor_y=fy, ceiling_y=cy))
+        opens = wall_openings(points, corners, fy if fy is not None else floor_y, cy if cy is not None else ceiling_y)
+        rooms.append(RoomPolygon(label=room_id, corners_xz=corners, area_m2=_polygon_area(corners), wall_lengths_m=lengths, floor_y=fy, ceiling_y=cy, openings=opens))
 
     # adjacency: rooms whose grown regions touch, contact length as doorway width
     for a in range(len(rooms)):

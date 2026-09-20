@@ -43,3 +43,22 @@ def test_rectilinear_polygon_removes_small_notches():
     w = np.ptp(corners[:, 0])
     h = np.ptp(corners[:, 1])
     assert abs(w - 140 * cell) < 0.1 and abs(h - 100 * cell) < 0.1
+
+
+def test_wall_openings_finds_a_door_and_a_window():
+    from floorplan_takehome.rooms import wall_openings
+
+    rng = np.random.default_rng(3)
+    pts = _box_points(0, 4, 0, 3, rng=rng, n_wall=20000)
+    # door 0.9 m wide on the z=0 wall from x=1.0, floor to 2.1 m
+    door = (np.abs(pts[:, 2]) < 0.02) & (pts[:, 0] > 1.0) & (pts[:, 0] < 1.9) & (pts[:, 1] < 2.1)
+    # window 1.2 m wide on the x=4 wall from z=0.8, sill 0.9 m to 2.0 m
+    window = (np.abs(pts[:, 0] - 4) < 0.02) & (pts[:, 2] > 0.8) & (pts[:, 2] < 2.0) & (pts[:, 1] > 0.9) & (pts[:, 1] < 2.0)
+    pts = pts[~door & ~window]
+    corners = np.array([[0, 0], [4, 0], [4, 3], [0, 3]], dtype=float)
+    found = wall_openings(pts, corners, floor_y=0.0, ceiling_y=2.6)
+    kinds = sorted(o["kind"] for o in found)
+    assert kinds == ["door", "window"], found
+    door_o = next(o for o in found if o["kind"] == "door")
+    window_o = next(o for o in found if o["kind"] == "window")
+    assert abs(door_o["width_cm"] - 90) <= 10 and abs(window_o["width_cm"] - 120) <= 10
