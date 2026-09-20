@@ -86,6 +86,8 @@ def main(out_path: Path) -> None:
                 t = json.loads(summ.read_text()).get("timing", {})
                 timing.append((cdir.name, t))
             for tier, plan in sorted(plans.items()):
+                if tier == "depth" and plan.get("diagnostics") is None:
+                    continue  # files-only upload, no depth tier to score
                 room = match_room(plan, gt) if gt else (plan["rooms"][0] if plan.get("rooms") else None)
                 n_rooms = len(plan.get("rooms", []))
                 closed = bool(room and room.get("polygon_cm"))

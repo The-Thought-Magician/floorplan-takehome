@@ -1,0 +1,76 @@
+# Task list
+
+Vertical slices, each demoable on its own. Checked items are done and in git.
+
+- [x] Common schema and RANSAC room extractor on a synthetic cube
+  - acceptance: 3 x 4 m synthetic room returns area 12 m2 within 0.05
+  - verify: `uv run pytest tests/test_plane_extraction.py`
+  - depends on: none
+- [x] ARCore capture page and unprojection
+  - acceptance: real phone capture unprojects into a cloud with vertical walls
+  - verify: upload from the phone, plan.png shows the room outline
+  - depends on: none
+- [x] Backend with one upload endpoint and a tunnel
+  - acceptance: phone uploads a zip, polls, sees plan.png
+  - verify: `tests/test_pipeline.py`, live upload
+  - depends on: previous
+- [x] Photo and video tiers through VGGT with pose alignment
+  - acceptance: bedroom photo tier closes a rectangle, rotation residual under 5 degrees on consecutive frames
+  - verify: `scripts/floorplan.py` on the bedroom capture
+  - depends on: schema
+- [x] Stray Scanner loader
+  - acceptance: floor 1.4 m below the camera, vertical walls on Cozmo's samples
+  - verify: `tests/test_stray_scanner.py`, plan.png on single_room
+  - depends on: schema
+- [x] Multi-room segmentation with adjacency
+  - acceptance: two synthetic rooms with a 0.9 m doorway split into two, door found
+  - verify: `tests/test_rooms.py`
+  - depends on: Stray loader
+- [x] Doors and windows from wall gaps
+  - acceptance: synthetic 90 cm door and 120 cm window found within 10 cm
+  - verify: `tests/test_rooms.py`
+  - depends on: multi-room
+- [x] Intervals on every measurement
+  - acceptance: every length, height, area, opening carries an interval and a basis string
+  - verify: `tests/test_intervals.py`
+  - depends on: schema
+- [x] Drift accountability with ablation
+  - acceptance: 1.2 deg/s synthetic drift recovered within 5 deg/min, plan.json carries on/off footprint metrics
+  - verify: `tests/test_drift.py`, single_room summary
+  - depends on: Stray loader
+- [x] Damage regions, concealed flags, scope items
+  - acceptance: sample crack labelled crack, undamaged bedroom yields zero regions
+  - verify: `tests/test_damage.py`, damage.json on single_room and the bedroom
+  - depends on: multi-room
+- [x] MoGe-2 scale for poseless captures
+  - acceptance: bedroom photos without poses close a levelled rectangle within 15 percent
+  - verify: `scripts/floorplan.py data/captures/bedroom-files-only`
+  - depends on: photo tier
+- [x] Fix loop: outer wall face
+  - acceptance: bedroom walls within 3 percent, LiDAR samples unchanged
+  - verify: docs/fix-loop.md commands
+  - depends on: depth tier
+- [x] Review pass with the repo skills
+  - acceptance: findings closed or recorded, ruff clean, tests pass
+  - verify: `uv run ruff check src scripts tests`, `uv run pytest -q`
+  - depends on: everything above
+- [ ] Second closed bedroom capture (repeat)
+  - acceptance: two depth-tier captures of the bedroom both close, wall agreement scored
+  - verify: docs/benchmark.md repeatability table
+  - depends on: user capture
+- [ ] Bedroom door width in the ground truth
+  - acceptance: openings gate scored on one room
+  - verify: docs/benchmark.md
+  - depends on: user tape measurement
+- [ ] Poseless whole-property stitch from per-room photo folders
+  - acceptance: two photo folders with a shared doorway photo produce two adjacent rooms
+  - verify: new test with synthetic renders, or a real two-room set
+  - depends on: none
+- [ ] Clean-machine run of scripts/setup.sh
+  - acceptance: fresh clone to first plan under 15 minutes on a machine with an NVIDIA GPU
+  - verify: timed run
+  - depends on: none
+- [ ] Technical report final pass under 6 pages
+  - acceptance: every number matches docs/benchmark.md and docs/fix-loop.md
+  - verify: read through
+  - depends on: benchmark final
