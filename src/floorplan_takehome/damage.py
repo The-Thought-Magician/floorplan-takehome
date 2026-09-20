@@ -114,7 +114,7 @@ def verify_with_vlm(results: dict[str, list[dict]], margin: float = 0.2) -> dict
     if not any(results.values()):
         return results
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = Qwen3VLForConditionalGeneration.from_pretrained(VLM_ID, dtype=torch.bfloat16 if device == "cuda" else torch.float32, device_map=device, attn_implementation="sdpa").eval()
+    model = Qwen3VLForConditionalGeneration.from_pretrained(VLM_ID, dtype=torch.bfloat16 if device == "cuda" else torch.float32, attn_implementation="sdpa").to(device).eval()
     processor = AutoProcessor.from_pretrained(VLM_ID)
     for path, found in results.items():
         image = Image.open(path).convert("RGB")
@@ -138,7 +138,7 @@ def verify_with_vlm(results: dict[str, list[dict]], margin: float = 0.2) -> dict
             if answer in CLASSES:
                 f["class"] = answer
                 kept.append(f)
-        results[path] = kept
+        results[path] = _merge_overlaps(kept)  # boxes that became the same class merge into one region
     del model
     if device == "cuda":
         torch.cuda.empty_cache()

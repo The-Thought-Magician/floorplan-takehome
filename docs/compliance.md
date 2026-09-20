@@ -23,7 +23,7 @@ the benchmark capture), not attempted.
 | Floor area | rooms.py | rooms[].area_m2 | done |
 | Openings | rooms.py `wall_openings` (doors, windows), adjacency contacts (doorways) | rooms[].openings | done, unverified against tape |
 | Stitched multi-room plan with adjacency | rooms.py `segment_rooms` | plan.json adjacency, plan.png | done on 3 sample scans |
-| Per-surface damage regions with class and metric extent | damage.py (OWLv2 localizer + Qwen3-VL-2B crop classifier) | damage.json regions | done, tested on the sample crack and an undamaged room |
+| Per-surface damage regions with class and metric extent | damage.py (OWLv2 localizer + Qwen3-VL-2B crop classifier) | damage.json regions | done: sample crack labelled crack, undamaged bedroom zero regions |
 | Concealed-damage flags with the rule that fired | damage.py `CONCEALED_RULES`, `flag_concealed` | damage.json concealed_flags | done |
 | Scope line items keyed to surfaces | damage.py `scope_items` | damage.json scope_items | done |
 | Confidence interval on every measurement | intervals.py | *_interval_cm fields, interval_basis | done, priors not yet calibrated |

@@ -354,8 +354,22 @@ Photo gate is 8 percent, so this fails narrowly and honestly.
   right place, labelled water stain at 0.55 even after re-scoring the crop
   across all class prompts. On the undamaged bedroom it produced three low-score
   false positives, rejected by the score and size rule (0.40, 8 cm).
-- Claude vision is wired as the second backend and is the intended detector when
-  an API key exists on the run machine; it is not tested yet for lack of a key.
+- Fix: a second stage. OWLv2 keeps localizing candidates at a low threshold,
+  then Qwen3-VL-2B-Instruct (Apache 2.0, 4.5 GB VRAM for the pair, about 1 s per
+  crop) looks at each crop and answers crack, water_stain, mould, peeling_paint
+  or none. On the sample bathroom the crack is now labelled crack by every box
+  that covers it; on the undamaged bedroom every candidate is answered none, so
+  zero regions come out. Chosen after a survey of open models: no released
+  weights cover all four classes, crack-only segmenters exist (YOLOv8-crack-seg
+  AGPL, SegFormer DeepCrack), and DefectBench (arXiv 2603.20148) puts Qwen3-VL
+  near much larger models on building pathology. Qwen2.5-VL-3B was rejected
+  for its non-commercial license and 8 GB footprint.
+- Claude vision stays wired as an optional backend. It costs money and needs a
+  key, so it is off by default and untested.
+- PyTorch 2.14 routes some ops through Triton JIT kernels, which need Python
+  headers this machine lacks. `TORCH_DISABLE_NATIVE_JIT=1` and
+  `TORCH_COMPILE_DISABLE=1` are set in the package `__init__` and must be in
+  the environment before torch is imported.
 - Damage acceptance and rejects are both written to damage.json so the report
   can show precision honestly once the staged-damage room is captured.
 
