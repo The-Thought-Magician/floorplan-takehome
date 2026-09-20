@@ -84,11 +84,40 @@ def detect_owlv2(image_paths: list[str], threshold: float = 0.25) -> dict[str, l
                     "box": [round(x0 / w, 4), round(y0 / h, 4), round(min(x1, w) / w, 4), round(min(y1, h) / h, 4)],
                 }
             )
-        results[path] = _merge_overlaps(found)
+        results[path] = _reclassify_crops(_merge_overlaps(found), image, processor, model, prompts, prompt_class, device)
     del model
     if device == "cuda":
         torch.cuda.empty_cache()
     return results
+
+
+def _reclassify_crops(found, image, processor, model, prompts, prompt_class, device, margin: float = 0.15):
+    """Whole-frame detection localizes well but confuses classes. Re-score each region on a
+    tight crop: the class whose best prompt scores highest on the crop wins, and the crop
+    score is kept as the region score when it is higher than the frame score."""
+    import torch
+
+    w, h = image.size
+    for f in found:
+        x0, y0, x1, y1 = f["box"]
+        bw, bh = x1 - x0, y1 - y0
+        crop = image.crop((int(max(0, x0 - margin * bw) * w), int(max(0, y0 - margin * bh) * h), int(min(1, x1 + margin * bw) * w), int(min(1, y1 + margin * bh) * h)))
+        if min(crop.size) < 32:
+            continue
+        inputs = processor(text=[prompts], images=crop, return_tensors="pt").to(device)
+        with torch.no_grad():
+            out = model(**inputs)
+        # per-prompt best score anywhere in the crop
+        scores = torch.sigmoid(out.logits[0]).max(dim=0).values.tolist()
+        by_class = {}
+        for sc, cls in zip(scores, prompt_class):
+            by_class[cls] = max(by_class.get(cls, 0.0), sc)
+        best_cls = max(by_class, key=by_class.get)
+        f["class_scores"] = {k: round(v, 3) for k, v in by_class.items()}
+        f["frame_class"] = f["class"]
+        f["class"] = best_cls
+        f["score"] = round(max(f["score"], by_class[best_cls]), 3)
+    return found
 
 
 def detect_claude(image_paths: list[str]) -> dict[str, list[dict]]:
@@ -284,7 +313,7 @@ def scope_items(rooms: list[dict], regions: list[dict]) -> list[dict]:
     return items
 
 
-MIN_SCORE = {"owlv2": 0.32, "claude": 0.5}
+MIN_SCORE = {"owlv2": 0.40, "claude": 0.5}
 MIN_SIDE_CM = 8.0  # anything smaller is a speck or a shadow edge, not a damage region
 
 
