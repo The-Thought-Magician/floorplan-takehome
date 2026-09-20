@@ -23,7 +23,7 @@ the benchmark capture), not attempted.
 | Floor area | rooms.py | rooms[].area_m2 | done |
 | Openings | rooms.py `wall_openings` (doors, windows), adjacency contacts (doorways) | rooms[].openings | done, unverified against tape |
 | Stitched multi-room plan with adjacency | rooms.py `segment_rooms` | plan.json adjacency, plan.png | done on 3 sample scans |
-| Per-surface damage regions with class and metric extent | damage.py | damage.json regions | done, detector untested on real damage |
+| Per-surface damage regions with class and metric extent | damage.py (OWLv2 localizer + Qwen3-VL-2B crop classifier) | damage.json regions | done, tested on the sample crack and an undamaged room |
 | Concealed-damage flags with the rule that fired | damage.py `CONCEALED_RULES`, `flag_concealed` | damage.json concealed_flags | done |
 | Scope line items keyed to surfaces | damage.py `scope_items` | damage.json scope_items | done |
 | Confidence interval on every measurement | intervals.py | *_interval_cm fields, interval_basis | done, priors not yet calibrated |
@@ -36,7 +36,7 @@ the benchmark capture), not attempted.
 | requirement | file | artifact | status |
 |---|---|---|---|
 | Multi-room capture, 3+ rooms plus connector | data/sample/single_scan_with_ceiling (Cozmo sample), user capture pending | plan.json | partial: sample has no ground truth |
-| Furnished room with staged damage in two classes | user capture pending (wet patch, taped crack) | damage.json | pending |
+| Furnished room with staged damage in two classes | not stageable in the available room; Cozmo's single_room sample has a real crack, used as the damage test | data/sample/single_room/damage.json | partial |
 | Same rooms at all three tiers | pipeline.py `process_stray_scan` runs all three on one scan | summary.json | done on samples, pending on user rooms |
 | One room captured twice, same tier | user capture pending | scripts/benchmark.py repeatability table | pending |
 | Laser or tape ground truth, raw data submitted | data/ground_truth/*.json, data/captures, data/sample | files | partial: one room so far |
@@ -57,8 +57,8 @@ the benchmark capture), not attempted.
 
 | requirement | file | artifact | status |
 |---|---|---|---|
-| Fix declaration: worst gate, root cause, predicted number | docs/fix-loop.md | the page | pending benchmark numbers |
-| Before and after runs, regenerable, readable diff | git history, scripts/floorplan.py | two summary.json plus git diff | pending |
+| Fix declaration: worst gate, root cause, predicted number | docs/fix-loop.md | the page | done (depth-tier wall lengths, -8/-14 percent to -1.3/+1.8 percent) |
+| Before and after runs, regenerable, readable diff | scripts/floorplan.py --wall-face centre/outer, commit "Outer wall face for thick depth bands" | data/fixloop/centre, data/fixloop/outer | done |
 
 ## Part 5: process evidence
 
@@ -84,7 +84,7 @@ the benchmark capture), not attempted.
 | constraint | how | status |
 |---|---|---|
 | Handheld consumer capture only | phone apps and the web page | done |
-| Pretrained models disclosed | VGGT-1B (FAIR non-commercial), OWLv2 (Apache 2.0), optional Claude API, all named in plan.json and docs/plan.md | done |
+| Pretrained models disclosed | VGGT-1B (FAIR non-commercial), MoGe-2 (MIT), OWLv2 (Apache 2.0), Qwen3-VL-2B (Apache 2.0), optional Claude API, all named in plan.json and docs/plan.md | done |
 | Runs without the author's infrastructure | everything local, tunnel is a capture convenience only | done |
 | Weights fetched by script | scripts/fetch_weights.sh | done |
 | Mirrors, glass, wet surfaces, low light | docs/capture-protocol.md (avoidance), docs/report.md failure modes | partial |
