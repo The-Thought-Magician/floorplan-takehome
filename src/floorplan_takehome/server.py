@@ -17,7 +17,11 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from floorplan_takehome.pipeline import process_capture_dir, process_image_tiers, run_damage_for_capture
+from floorplan_takehome.pipeline import (
+    process_capture_dir,
+    process_image_tiers,
+    run_damage_for_capture,
+)
 
 log = logging.getLogger("floorplan")
 
@@ -61,6 +65,21 @@ def _safe_extract(zip_path: Path, dest: Path) -> None:
         zf.extractall(dest)
 
 
+async def _save_upload(file: UploadFile, dest: Path) -> int:
+    """Stream an upload to disk with a size cap. Writes are small and local, done off the loop."""
+    import asyncio
+
+    size = 0
+    chunks = []
+    while chunk := await file.read(1 << 20):
+        size += len(chunk)
+        if size > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "upload too large")
+        chunks.append(chunk)
+    await asyncio.to_thread(dest.write_bytes, b"".join(chunks))
+    return size
+
+
 def _run(capture_id: str, capture_dir: Path) -> None:
     _set(capture_id, state="processing", started=time.time())
     try:
@@ -70,11 +89,11 @@ def _run(capture_id: str, capture_dir: Path) -> None:
             process_image_tiers(capture_dir, plan)
             try:
                 run_damage_for_capture(capture_dir, plan)
-            except Exception as e:  # noqa: BLE001, damage is reported, never fatal
+            except Exception as e:
                 log.exception("damage detection failed for %s", capture_id)
                 plan["damage"] = {"error": f"{type(e).__name__}: {e}"}
         _set(capture_id, plan=plan, tiers_state="done")
-    except Exception as e:  # noqa: BLE001, surfaced to the client
+    except Exception as e:
         log.exception("processing failed for %s", capture_id)
         _set(capture_id, state="failed", error=f"{type(e).__name__}: {e}", finished=time.time())
 
@@ -96,13 +115,7 @@ async def upload_capture(file: UploadFile):
     capture_dir.mkdir(parents=True, exist_ok=True)
     zip_path = capture_dir / "upload.zip"
 
-    size = 0
-    with open(zip_path, "wb") as out:
-        while chunk := await file.read(1 << 20):
-            size += len(chunk)
-            if size > MAX_UPLOAD_BYTES:
-                raise HTTPException(413, "upload too large")
-            out.write(chunk)
+    size = await _save_upload(file, zip_path)
 
     try:
         _safe_extract(zip_path, capture_dir)
@@ -123,13 +136,7 @@ async def upload_video(capture_id: str, file: UploadFile):
     capture_dir = _capture_dir(capture_id)
     if not capture_dir.is_dir():
         raise HTTPException(404, "unknown capture")
-    size = 0
-    with open(capture_dir / "video.webm", "wb") as out:
-        while chunk := await file.read(1 << 20):
-            size += len(chunk)
-            if size > MAX_UPLOAD_BYTES:
-                raise HTTPException(413, "upload too large")
-            out.write(chunk)
+    size = await _save_upload(file, capture_dir / "video.webm")
     return {"id": capture_id, "video_bytes": size}
 
 

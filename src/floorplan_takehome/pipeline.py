@@ -9,11 +9,11 @@ import open3d as o3d
 from floorplan_takehome.depth_capture import load_point_cloud
 from floorplan_takehome.plane_extraction import (
     manhattan_filter,
-    outer_walls,
-    refine_wall_faces,
     merge_walls,
+    outer_walls,
     polygon_area,
     polygon_perimeter,
+    refine_wall_faces,
     segment_planes,
     wall_polygon,
 )
@@ -154,7 +154,7 @@ def render_topdown(cloud: o3d.geometry.PointCloud, plan: dict, out_png: Path, ca
             ax.text(mx, mz, f"{length:.0f} cm", color="red", fontsize=8, ha="center")
         ax.set_title(f"area {plan['rooms'][0]['area_m2']:.2f} m2")
     else:
-        ax.set_title("no closed polygon (walls found: %d)" % plan["diagnostics"]["walls"])
+        ax.set_title(f"no closed polygon (walls found: {plan['diagnostics']['walls']})")
     ax.set_xlabel("x (m)")
     ax.set_ylabel("z (m)")
     ax.set_aspect("equal")
@@ -182,7 +182,12 @@ def process_image_tiers(capture_dir: Path, plan: dict) -> dict:
     for the photos. Results land in plan_photos.* and plan_video.* and a summary
     in plan["tiers"]. GPU errors are recorded, not raised.
     """
-    from floorplan_takehome.multiview import depth_scale_check, photo_paths_and_poses, reconstruct_images, video_frame_paths
+    from floorplan_takehome.multiview import (
+        depth_scale_check,
+        photo_paths_and_poses,
+        reconstruct_images,
+        video_frame_paths,
+    )
 
     capture_dir = Path(capture_dir)
     tiers = {}
@@ -250,7 +255,7 @@ def process_capture_dir(capture_dir: Path) -> dict:
     plan = reconstruct_multiroom(cloud, "depth", cameras)
     plan["capture"] = {
         "format": "web_capture",
-        "frames": int(len(cameras)),
+        "frames": len(cameras),
         "photos": sorted(p.name for p in (capture_dir / "photos").glob("*.jpg")) if (capture_dir / "photos").exists() else [],
         "video": next((p.name for p in capture_dir.glob("video.*")), None),
     }
@@ -325,13 +330,21 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
     import time
 
     from floorplan_takehome import stray_scanner as ss
-    from floorplan_takehome.multiview import photo_folders_from_rooms, reconstruct_photo_folders, reconstruct_video_chunked
+    from floorplan_takehome.multiview import (
+        photo_folders_from_rooms,
+        reconstruct_photo_folders,
+        reconstruct_video_chunked,
+    )
 
     scan_dir, out_dir = Path(scan_dir), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     timing = {}
 
-    from floorplan_takehome.drift import apply_drift_correction, estimate_yaw_drift, footprint_metrics
+    from floorplan_takehome.drift import (
+        apply_drift_correction,
+        estimate_yaw_drift,
+        footprint_metrics,
+    )
 
     t = time.time()
     # drift: estimate heading drift from wall directions per time window, correct poses,
@@ -362,11 +375,11 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
         "on": {**footprint_metrics(np.asarray(clean_cloud(cloud).points), floor_y), "rooms": len(plan["rooms"]), "area_m2": [r.get("area_m2") for r in plan["rooms"]]},
     }
     plan["diagnostics"]["drift"] = drift_info
-    plan["capture"] = {"format": "stray_scanner", "frames": int(len(cameras)), "scan": str(scan_dir)}
+    plan["capture"] = {"format": "stray_scanner", "frames": len(cameras), "scan": str(scan_dir)}
     timing["lidar_s"] = round(time.time() - t, 1)
     _write_plan(plan_off, cloud_off, cameras, out_dir, "depth_drift_off")
     _write_plan(plan, cloud, cameras, out_dir, "depth")
-    summary = {"lidar": _tier_summary(plan, {"frames": int(len(cameras)), "drift": drift_info})}
+    summary = {"lidar": _tier_summary(plan, {"frames": len(cameras), "drift": drift_info})}
 
     if run_image_tiers:
         every = 30  # 2 frames per second at 60 fps; chunking bounds memory, not the frame count

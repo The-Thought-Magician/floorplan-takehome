@@ -11,6 +11,7 @@ Approach (no learned model, works on every tier that yields a floor):
    doorway width.
 """
 
+import itertools
 from dataclasses import dataclass, field
 
 import cv2
@@ -61,27 +62,27 @@ def wall_openings(points: np.ndarray, corners_xz: np.ndarray, floor_y: float, ce
         if n_steps < 2:
             continue
 
-        def hist(mask):
-            return np.histogram(along[mask], bins=n_steps, range=(0, length))[0]
+        def hist(mask, a=along, n=n_steps, ln=length):
+            return np.histogram(a[mask], bins=n, range=(0, ln))[0]
 
         observed = hist(near) > 0
         full_open = hist(near & (y > floor_y + door_low_m) & (y < top)) == 0
         upper_open = hist(near & (y > floor_y + 1.0) & (y < min(top, floor_y + 1.9))) == 0
 
-        def runs(is_open, kind):
+        def runs(is_open, kind, wall_index=i, n=n_steps, seen_mask=observed):
             j = 0
-            while j < n_steps:
+            while j < n:
                 if not is_open[j]:
                     j += 1
                     continue
                 k = j
-                while k < n_steps and is_open[k]:
+                while k < n and is_open[k]:
                     k += 1
                 width = (k - j) * step_m
-                touches_corner = j == 0 or k == n_steps
-                seen = observed[max(0, j - 2):min(n_steps, k + 2)].any()
+                touches_corner = j == 0 or k == n
+                seen = seen_mask[max(0, j - 2):min(n, k + 2)].any()
                 if width >= min_width_m and not touches_corner and seen:
-                    openings.append({"wall": i, "kind": kind, "from_corner_cm": round(j * step_m * 100, 1), "width_cm": round(width * 100, 1)})
+                    openings.append({"wall": wall_index, "kind": kind, "from_corner_cm": round(j * step_m * 100, 1), "width_cm": round(width * 100, 1)})
                 j = k
 
         runs(full_open, "door")
@@ -262,7 +263,7 @@ def segment_rooms(
     # a wall cell has points at every height; ceiling plus furniture only fills the top and bottom
     band_edges = floor_y + np.array([0.2, 0.7, 1.2, 1.7, 2.2])
     occupied_bands = np.zeros(shape, dtype=np.int32)
-    for lo, hi in zip(band_edges[:-1], band_edges[1:]):
+    for lo, hi in itertools.pairwise(band_edges):
         sel = (body[:, 1] >= lo) & (body[:, 1] < hi)
         occupied_bands += _rasterise(body_xz[sel], origin, cell, shape) > 0
     count = _rasterise(body_xz, origin, cell, shape)
@@ -299,7 +300,7 @@ def segment_rooms(
             next_id += 1
 
     # region growing: nearest seed within free space
-    dist, (ri, ci) = ndimage.distance_transform_edt(seeds == 0, return_indices=True)
+    _, (ri, ci) = ndimage.distance_transform_edt(seeds == 0, return_indices=True)
     grown = np.where(free, seeds[ri, ci], 0)
 
     rooms = []

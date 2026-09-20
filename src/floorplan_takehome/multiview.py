@@ -161,7 +161,7 @@ def reconstruct_images(
     keep = out["conf"] >= np.percentile(out["conf"], conf_percentile)
     points = out["points"][keep]
 
-    info = {"images": len(image_paths), "peak_vram_gb": out["peak_vram_gb"], "points": int(len(points))}
+    info = {"images": len(image_paths), "peak_vram_gb": out["peak_vram_gb"], "points": len(points)}
     if known_poses and len(known_poses) >= 3:
         scale, rotation, translation, fit = align_cameras(out["extrinsic"], known_poses)
         points = apply_similarity(points, scale, rotation, translation)
@@ -220,6 +220,7 @@ def video_frame_paths(capture_dir: Path, fps: float = 1.0) -> list[str]:
         result = subprocess.run(
             ["ffmpeg", "-v", "error", "-y", "-i", str(video), "-vf", f"fps={fps}", "-q:v", "2", str(frames_dir / "%04d.jpg")],
             capture_output=True,
+            check=False,
         )
         if result.returncode != 0:
             import logging
@@ -359,7 +360,7 @@ def photo_folders_from_rooms(rooms: list[dict], paths: list[str], known: dict[in
         ]
         if len(inside) < 2:
             continue
-        pick = [inside[int(round(k))] for k in np.linspace(0, len(inside) - 1, min(per_room, len(inside)))]
+        pick = [inside[round(k)] for k in np.linspace(0, len(inside) - 1, min(per_room, len(inside)))]
         pick = sorted(set(pick))
         folders[room["id"]] = ([paths[i] for i in pick], {k: known[i] for k, i in enumerate(pick)})
     return folders
@@ -454,7 +455,7 @@ def aggregate_frame_scales(per_frame: list[tuple[float, float]]) -> tuple[float,
         "moge_scale_far_frames": round(float(np.median(far)), 4),
         "moge_scale_min": round(float(ratios.min()), 4),
         "moge_scale_max": round(float(ratios.max()), 4),
-        "moge_frames": int(len(ratios)),
+        "moge_frames": len(ratios),
     }
 
 
@@ -472,7 +473,7 @@ def moge_scale(image_paths: list[str], out: dict, fov_x: dict[int, float] | None
 
     pts, conf, ext = out["points"], out["conf"], out["extrinsic"]
     s, h, w, _ = pts.shape
-    pick = list(range(s)) if s <= max_frames else [int(round(k)) for k in np.linspace(0, s - 1, max_frames)]
+    pick = list(range(s)) if s <= max_frames else [round(k) for k in np.linspace(0, s - 1, max_frames)]
     model = MoGeModel.from_pretrained("Ruicheng/moge-2-vitl").to("cuda").eval()
     per_frame = []
     for i in pick:

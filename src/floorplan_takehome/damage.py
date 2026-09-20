@@ -200,7 +200,7 @@ def detect_claude(image_paths: list[str]) -> dict[str, list[dict]]:
             results[path] = []
             continue
         text = "".join(b.text for b in response.content if b.type == "text")
-        match = re.search(r"\[.*\]", text, re.S)
+        match = re.search(r"\[.*\]", text, re.DOTALL)
         try:
             items = json.loads(match.group(0)) if match else []
         except json.JSONDecodeError:
