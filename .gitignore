@@ -8,6 +8,6 @@ data/sample_photos/*
 data/sample_video/*
 data/sample_lidar/*
 .DS_Store
-
+data/sample*
 data/captures/*
 third_party/
