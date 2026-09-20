@@ -64,6 +64,12 @@ def reconstruct(cloud: o3d.geometry.PointCloud, source_tier: str, cameras: np.nd
     camera_y = float(np.median(cameras[:, 1])) if cameras is not None and len(cameras) else None
     floor_y, ceiling_y = _floor_and_ceiling(planes, camera_y)
     wall_height = None if floor_y is None or ceiling_y is None else ceiling_y - floor_y
+    height_source = "floor_ceiling_planes" if wall_height is not None else None
+    if wall_height is None and walls:
+        # walls run floor to ceiling, so the vertical extent of their inliers is the room height
+        extents = [np.percentile(w.points[:, 1], 99) - np.percentile(w.points[:, 1], 1) for w in walls]
+        wall_height = float(np.median(extents))
+        height_source = "wall_extent"
 
     room = {
         "id": "room-1",
@@ -92,6 +98,7 @@ def reconstruct(cloud: o3d.geometry.PointCloud, source_tier: str, cameras: np.nd
             "walls_rejected_off_axis": len(raw_walls) - len(manhattan_filter(raw_walls)),
             "walls_rejected_interior": len(manhattan_filter(raw_walls)) - len(walls),
             "closed": bool(corners),
+            "height_source": height_source,
             "camera_height_m": None if camera_y is None or floor_y is None else round(camera_y - floor_y, 3),
             "floor_y": None if floor_y is None else round(floor_y, 3),
             "ceiling_y": None if ceiling_y is None else round(ceiling_y, 3),
