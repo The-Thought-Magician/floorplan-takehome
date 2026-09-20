@@ -144,3 +144,22 @@ def test_manhattan_filter_drops_diagonal_plane_and_snaps_the_rest():
     corners = wall_polygon(kept)
     assert len(corners) == 4
     assert abs(polygon_area(corners) - 12.0) < 0.3
+
+
+def test_outer_walls_drops_parallel_plane_inside_the_room():
+    from floorplan_takehome.plane_extraction import outer_walls
+
+    def plane(nx, nz, pts):
+        n = np.array([nx, 0.0, nz])
+        return Plane(normal=n, d=-n @ pts.mean(axis=0), points=pts)
+
+    walls = [
+        plane(1.0, 0.0, _wall_points((0, 0), (0, 4))),
+        plane(1.0, 0.0, _wall_points((3, 3), (0, 4))),
+        plane(-1.0, 0.0, _wall_points((1.4, 1.4), (0, 2))),  # wardrobe front, flipped normal
+        plane(0.0, 1.0, _wall_points((0, 3), (0, 0))),
+        plane(0.0, 1.0, _wall_points((0, 3), (4, 4))),
+    ]
+    kept = outer_walls(walls)
+    assert len(kept) == 4
+    assert abs(polygon_area(wall_polygon(kept)) - 12.0) < 0.3

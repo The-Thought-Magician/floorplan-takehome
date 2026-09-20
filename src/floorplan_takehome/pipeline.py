@@ -9,6 +9,7 @@ import open3d as o3d
 from floorplan_takehome.depth_capture import load_point_cloud
 from floorplan_takehome.plane_extraction import (
     manhattan_filter,
+    outer_walls,
     merge_walls,
     polygon_area,
     polygon_perimeter,
@@ -55,7 +56,7 @@ def reconstruct(cloud: o3d.geometry.PointCloud, source_tier: str, cameras: np.nd
     cloud = clean_cloud(cloud)
     planes = segment_planes(cloud, distance_threshold=0.04, max_planes=10, min_inliers=80)
     raw_walls = merge_walls([p for p in planes if p.is_wall])
-    walls = manhattan_filter(raw_walls)
+    walls = outer_walls(manhattan_filter(raw_walls))
     corners = wall_polygon(walls)
 
     n_points = len(cloud.points)
@@ -88,7 +89,8 @@ def reconstruct(cloud: o3d.geometry.PointCloud, source_tier: str, cameras: np.nd
             "planes": len(planes),
             "tilted_planes_rejected": sum(1 for p in planes if p.is_tilted),
             "walls": len(walls),
-            "walls_rejected_off_axis": len(raw_walls) - len(walls),
+            "walls_rejected_off_axis": len(raw_walls) - len(manhattan_filter(raw_walls)),
+            "walls_rejected_interior": len(manhattan_filter(raw_walls)) - len(walls),
             "closed": bool(corners),
             "camera_height_m": None if camera_y is None or floor_y is None else round(camera_y - floor_y, 3),
             "floor_y": None if floor_y is None else round(floor_y, 3),

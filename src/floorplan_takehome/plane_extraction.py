@@ -127,6 +127,24 @@ def manhattan_filter(walls: list[Plane], max_dev_deg: float = 20.0) -> list[Plan
     return kept
 
 
+def outer_walls(walls: list[Plane]) -> list[Plane]:
+    """Keep the two outermost planes per room axis. Parallel planes between them are furniture."""
+    groups: dict[int, list[tuple[float, Plane]]] = {0: [], 1: []}
+    for w in walls:
+        a, c, d = _xz_line(w)
+        axis = 0 if abs(a) >= abs(c) else 1
+        sign = np.sign(a if axis == 0 else c) or 1.0
+        groups[axis].append((sign * -d, w))  # signed offset along the axis direction
+    kept = []
+    for members in groups.values():
+        members.sort(key=lambda m: m[0])
+        if len(members) <= 2:
+            kept.extend(w for _, w in members)
+        else:
+            kept.extend([members[0][1], members[-1][1]])
+    return kept
+
+
 def _order_by_angle(walls: list[Plane]) -> list[Plane]:
     all_points = np.concatenate([w.points for w in walls], axis=0)
     center = all_points[:, [0, 2]].mean(axis=0)
