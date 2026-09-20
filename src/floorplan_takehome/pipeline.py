@@ -380,6 +380,15 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
             summary["photos"] = {"error": f"{type(e).__name__}: {e}"}
         timing["photos_s"] = round(time.time() - t, 1)
 
+    if run_image_tiers:
+        t = time.time()
+        try:
+            damage = run_damage_for_stray(scan_dir, out_dir, plan)
+            summary["damage"] = None if damage is None else {"detector": damage["detector"], "regions": len(damage["regions"]), "rejected": len(damage["rejected"]), "flags": damage["concealed_flags"]}
+        except Exception as e:  # noqa: BLE001
+            summary["damage"] = {"error": f"{type(e).__name__}: {e}"}
+        timing["damage_s"] = round(time.time() - t, 1)
+
     summary["timing"] = timing
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
     return summary

@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from floorplan_takehome.pipeline import process_capture_dir, process_image_tiers
+from floorplan_takehome.pipeline import process_capture_dir, process_image_tiers, run_damage_for_capture
 
 log = logging.getLogger("floorplan")
 
@@ -56,6 +56,11 @@ def _run(capture_id: str, capture_dir: Path) -> None:
         _set(capture_id, state="done", plan=plan, finished=time.time(), tiers_state="running")
         with _tier_lock:  # one GPU job at a time
             process_image_tiers(capture_dir, plan)
+            try:
+                run_damage_for_capture(capture_dir, plan)
+            except Exception as e:  # noqa: BLE001, damage is reported, never fatal
+                log.exception("damage detection failed for %s", capture_id)
+                plan["damage"] = {"error": f"{type(e).__name__}: {e}"}
         _set(capture_id, plan=plan, tiers_state="done")
     except Exception as e:  # noqa: BLE001, surfaced to the client
         log.exception("processing failed for %s", capture_id)

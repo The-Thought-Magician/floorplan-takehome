@@ -62,7 +62,7 @@
 <canvas id="photo-canvas"></canvas>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-const PAGE_VERSION = 8;
+const PAGE_VERSION = 9;
 const GRID_X = 20;          // coarse getDepthInMeters grid, kept as a decode cross-check
 const GRID_Y = 15;
 const VIDEO_FRAME_STRIDE = 2;   // draw every 2nd XR frame into the video (about 15 fps)
@@ -458,6 +458,8 @@ async function pollResult(id) {
           + (t.scale ? ', scale ' + t.scale : ', relative scale only') + (t.peak_vram_gb ? ', vram ' + t.peak_vram_gb + ' GB' : ''));
         if (!t.error) $('result').innerHTML += '<img src="/api/captures/' + id + '/plan.png?tier=' + tier + '&t=' + Date.now() + '">';
       }
+      const dmg = status.plan.damage;
+      if (dmg) log('damage: ' + (dmg.error ? dmg.error : (dmg.regions || []).length + ' regions, ' + (dmg.concealed_flags || []).length + ' concealed flags, detector ' + (dmg.detector ? dmg.detector.backend : '?')));
       return;
     }
     if (status.state === 'failed') { log('processing failed: ' + status.error); return; }
