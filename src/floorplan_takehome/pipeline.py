@@ -303,7 +303,7 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
     import time
 
     from floorplan_takehome import stray_scanner as ss
-    from floorplan_takehome.multiview import reconstruct_images, reconstruct_video_chunked
+    from floorplan_takehome.multiview import photo_folders_from_rooms, reconstruct_photo_folders, reconstruct_video_chunked
 
     scan_dir, out_dir = Path(scan_dir), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -318,22 +318,32 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
     summary = {"lidar": _tier_summary(plan, {"frames": int(len(cameras))})}
 
     if run_image_tiers:
-        n_frames = len(cameras)
         every = 30  # 2 frames per second at 60 fps; chunking bounds memory, not the frame count
-        for tier, step in (("video", every), ("photos", max(every, n_frames // 8))):
-            t = time.time()
-            try:
-                paths, known = ss.video_frames_with_poses(scan_dir, out_dir / f"frames_{tier}", every=step)
-                if tier == "video":
-                    cloud_t, cams_t, info = reconstruct_video_chunked(paths, known, cache_dir=out_dir / "vggt_video_chunks")
-                else:
-                    cloud_t, cams_t, info = reconstruct_images(paths, known, cache=out_dir / f"vggt_{tier}.npz")
-                plan_t = reconstruct_multiroom(cloud_t, tier, cams_t)
-                _write_plan(plan_t, cloud_t, cams_t, out_dir, tier)
-                summary[tier] = _tier_summary(plan_t, info)
-            except Exception as e:  # noqa: BLE001
-                summary[tier] = {"error": f"{type(e).__name__}: {e}"}
-            timing[f"{tier}_s"] = round(time.time() - t, 1)
+        paths, known = ss.video_frames_with_poses(scan_dir, out_dir / "frames", every=every)
+
+        t = time.time()
+        try:
+            cloud_t, cams_t, info = reconstruct_video_chunked(paths, known, cache_dir=out_dir / "vggt_video_chunks")
+            plan_t = reconstruct_multiroom(cloud_t, "video", cams_t)
+            _write_plan(plan_t, cloud_t, cams_t, out_dir, "video")
+            summary["video"] = _tier_summary(plan_t, info)
+        except Exception as e:  # noqa: BLE001
+            summary["video"] = {"error": f"{type(e).__name__}: {e}"}
+        timing["video_s"] = round(time.time() - t, 1)
+
+        # photo tier: the assessment delivers 2 to 8 stills per room. Emulate that from the
+        # walk: frames are assigned to the LiDAR rooms by camera position, 8 spread stills per
+        # room, one reconstruction per room, all placed in the shared frame by their poses.
+        t = time.time()
+        try:
+            folders = photo_folders_from_rooms(plan["rooms"], paths, known, per_room=8)
+            cloud_t, cams_t, info = reconstruct_photo_folders(folders, cache_dir=out_dir / "vggt_photos")
+            plan_t = reconstruct_multiroom(cloud_t, "photos", cams_t)
+            _write_plan(plan_t, cloud_t, cams_t, out_dir, "photos")
+            summary["photos"] = _tier_summary(plan_t, info)
+        except Exception as e:  # noqa: BLE001
+            summary["photos"] = {"error": f"{type(e).__name__}: {e}"}
+        timing["photos_s"] = round(time.time() - t, 1)
 
     summary["timing"] = timing
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))

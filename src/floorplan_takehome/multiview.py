@@ -134,6 +134,7 @@ def run_vggt(image_paths: list[str], cache: Path | None = None) -> dict:
     del model, images, predictions
     torch.cuda.empty_cache()
     if cache:
+        Path(cache).parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(cache, paths=np.array(image_paths), **out)
     return out
 
@@ -313,5 +314,67 @@ def reconstruct_video_chunked(
         "camera_residual_cm_median": round(float(np.median([f["camera_residual_cm_median"] for f in fits])), 1),
         "rotation_residual_deg_median": round(float(np.median([f["rotation_residual_deg_median"] for f in fits])), 1),
         "worst_chunk_rotation_deg": round(float(max(f["rotation_residual_deg_median"] for f in fits)), 1),
+    }
+    return cloud, np.concatenate(centers), info
+
+
+def photo_folders_from_rooms(rooms: list[dict], paths: list[str], known: dict[int, np.ndarray], per_room: int = 8) -> dict[str, tuple[list[str], dict[int, np.ndarray]]]:
+    """Group frames into per-room photo sets by camera position inside each room polygon,
+    keeping per_room horizontal, time-spread frames. Emulates per-room photo folders."""
+    import cv2
+
+    horizontal = set(horizontal_frames(known))
+    folders = {}
+    for room in rooms:
+        poly = np.array(room["polygon_cm"], dtype=np.float32) / 100.0
+        if len(poly) < 3:
+            continue
+        inside = [
+            i for i in sorted(known)
+            if i in horizontal and cv2.pointPolygonTest(poly.reshape(-1, 1, 2), (float(known[i][0, 3]), float(known[i][2, 3])), False) >= 0
+        ]
+        if len(inside) < 2:
+            continue
+        pick = [inside[int(round(k))] for k in np.linspace(0, len(inside) - 1, min(per_room, len(inside)))]
+        pick = sorted(set(pick))
+        folders[room["id"]] = ([paths[i] for i in pick], {k: known[i] for k, i in enumerate(pick)})
+    return folders
+
+
+def reconstruct_photo_folders(folders: dict[str, tuple[list[str], dict[int, np.ndarray]]], conf_percentile: float = 30.0,
+                              cache_dir: Path | None = None) -> tuple[o3d.geometry.PointCloud, np.ndarray, dict]:
+    """One reconstruction per room folder, each placed by its own known poses, merged."""
+    clouds, centers, per_room = [], [], {}
+    peak = 0.0
+    for room_id, (paths, poses) in folders.items():
+        cache = (cache_dir / f"{room_id}.npz") if cache_dir else None
+        out = run_vggt(paths, cache)
+        peak = max(peak, out["peak_vram_gb"])
+        keep = out["conf"] >= np.percentile(out["conf"], conf_percentile)
+        pts = out["points"][keep]
+        cams = camera_centers_from_extrinsics(out["extrinsic"])
+        if len(poses) >= 3:
+            scale, rotation, translation, fit = align_cameras(out["extrinsic"], poses)
+            pts = apply_similarity(pts, scale, rotation, translation)
+            cams = apply_similarity(cams, scale, rotation, translation)
+            per_room[room_id] = {"images": len(paths), **fit}
+        else:
+            per_room[room_id] = {"images": len(paths), "scale": None}
+        clouds.append(pts.astype(np.float64))
+        centers.append(cams)
+    if not clouds:
+        raise ValueError("no room had enough photos")
+    cloud = o3d.geometry.PointCloud()
+    cloud.points = o3d.utility.Vector3dVector(np.concatenate(clouds))
+    fits = [v for v in per_room.values() if v.get("scale")]
+    info = {
+        "images": sum(v["images"] for v in per_room.values()),
+        "rooms_reconstructed": len(per_room),
+        "peak_vram_gb": round(peak, 2),
+        "points": int(sum(len(c) for c in clouds)),
+        "scale": round(float(np.median([f["scale"] for f in fits])), 4) if fits else None,
+        "camera_residual_cm_median": round(float(np.median([f["camera_residual_cm_median"] for f in fits])), 1) if fits else None,
+        "rotation_residual_deg_median": round(float(np.median([f["rotation_residual_deg_median"] for f in fits])), 1) if fits else None,
+        "per_room": per_room,
     }
     return cloud, np.concatenate(centers), info
