@@ -235,11 +235,27 @@ after the depth plan on every upload. Measured on the furnished-room capture:
     median, but per frame from 2.0 to 3.8. Either ARCore depth or VGGT's
     per-frame depth is not self-consistent across frames.
   - depth tier rectangle is 1.5x the photo tier rectangle.
-- Aspect ratios agree (1.19, 1.37, 1.25), so the geometry is right and only
-  the scalar is unresolved. A tape measure of two walls decides it. Until
-  then no tier can be called cm-accurate.
+- Tape ground truth (data/ground_truth/bedroom.json): 426.7 x 365.8 cm.
+  Against it:
+
+  | tier, scale source | result | error |
+  |---|---|---|
+  | depth (ARCore) | 393 x 314 | -8%, -14% |
+  | photos, pose-based scale 1.38 | 258 x 217 | -40% |
+  | photos, ARCore-depth-based scale 2.49 | 465 x 391 | +9%, +7% |
+  | scale that would be exact | 2.30 | |
+
+  VGGT's aspect ratio is 1.19 against a true 1.17, its geometry is the best
+  of the three. The pose-based scale is unusable on a rotate-in-place
+  capture (VGGT translations are noise on a 1m baseline). The ARCore-depth
+  anchor is 8% high, consistent with ARCore reading textured walls about 8%
+  too far on this phone. The depth tier rectangle is low because RANSAC fits
+  the middle of a thick, fill-contaminated band. Photo and video tiers now
+  use the depth anchor when ARCore depth exists for the photos.
 - Fix for the pose-based scale: capture photos while walking, not rotating.
   A 3m baseline gives VGGT translations that a similarity fit can trust.
+  This is what the iPhone protocol will require, since there is no ARCore
+  depth to anchor on there.
 
 ## Scale strategy summary
 

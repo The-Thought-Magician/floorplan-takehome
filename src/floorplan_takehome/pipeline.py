@@ -168,14 +168,25 @@ def process_image_tiers(capture_dir: Path, plan: dict) -> dict:
 
     for tier, paths, known in jobs:
         try:
-            cloud, cameras, info = reconstruct_images(paths, known, cache=capture_dir / f"vggt_{tier}.npz")
+            cache = capture_dir / f"vggt_{tier}.npz"
+            cloud, cameras, info = reconstruct_images(paths, known, cache=cache)
+            check = depth_scale_check(capture_dir, paths, cache)
+            if check and info.get("scale"):
+                # Pixel-wise depth agreement beats a pose fit on a short baseline (tape-verified,
+                # see plan.md). Rescale about the aligned cameras' centroid.
+                factor = check["depth_based_scale"] / info["scale"]
+                pivot = cameras.mean(axis=0)
+                pts = (np.asarray(cloud.points) - pivot) * factor + pivot
+                cloud.points = o3d.utility.Vector3dVector(pts)
+                cameras = (cameras - pivot) * factor + pivot
+                info["scale_check"] = check
+                info["scale_used"] = "arcore_depth"
+                info["pose_scale"] = info["scale"]
+                info["scale"] = check["depth_based_scale"]
             tier_plan = reconstruct(cloud, source_tier=tier, cameras=cameras)
             o3d.io.write_point_cloud(str(capture_dir / f"cloud_{tier}.ply"), clean_cloud(cloud))
             render_topdown(clean_cloud(cloud), tier_plan, capture_dir / f"plan_{tier}.png", cameras)
             (capture_dir / f"plan_{tier}.json").write_text(json.dumps(tier_plan, indent=2))
-            check = depth_scale_check(capture_dir, paths, capture_dir / f"vggt_{tier}.npz")
-            if check:
-                info["scale_check"] = check
             tiers[tier] = _tier_summary(tier_plan, info)
         except Exception as e:  # noqa: BLE001, surfaced in the plan
             tiers[tier] = {"error": f"{type(e).__name__}: {e}"}
