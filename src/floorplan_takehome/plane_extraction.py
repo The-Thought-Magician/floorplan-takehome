@@ -16,6 +16,16 @@ class Plane:
     def is_wall(self) -> bool:
         return abs(self.normal[1]) < 0.35
 
+    @property
+    def is_horizontal(self) -> bool:
+        return abs(self.normal[1]) > 0.9
+
+    @property
+    def is_tilted(self) -> bool:
+        """Neither wall nor floor/ceiling. On ARCore captures these are almost always
+        smooth-depth fill from a textureless surface, not real geometry."""
+        return not self.is_wall and not self.is_horizontal
+
 
 def segment_planes(
     cloud: o3d.geometry.PointCloud,
@@ -45,7 +55,7 @@ def segment_planes(
 
 def _refit(points: np.ndarray) -> Plane:
     centroid = points.mean(axis=0)
-    _, _, vt = np.linalg.svd(points - centroid)
+    _, _, vt = np.linalg.svd(points - centroid, full_matrices=False)
     normal = vt[-1]
     if normal[1] < 0:
         normal = -normal
@@ -86,6 +96,37 @@ def merge_walls(
     return merged
 
 
+def manhattan_filter(walls: list[Plane], max_dev_deg: float = 20.0) -> list[Plane]:
+    """Keep walls aligned with the dominant pair of perpendicular directions and snap them to it.
+
+    Rooms have perpendicular walls. A plane 45 degrees off the room axes is a fit
+    through the noise band at a corner, not a wall.
+    """
+    if len(walls) < 2:
+        return list(walls)
+    angles = []
+    weights = []
+    for w in walls:
+        a, c, _ = _xz_line(w)
+        angles.append(np.arctan2(c, a))
+        weights.append(len(w.points))
+    # circular mean on the 90 degree period, weighted by point count
+    phase = np.average(np.exp(4j * np.array(angles)), weights=np.array(weights))
+    axis = np.angle(phase) / 4
+
+    kept = []
+    for w, ang in zip(walls, angles):
+        dev = (ang - axis + np.pi / 4) % (np.pi / 2) - np.pi / 4
+        if abs(np.degrees(dev)) > max_dev_deg:
+            continue
+        snapped = ang - dev
+        a, c = np.cos(snapped), np.sin(snapped)
+        normal = np.array([a, 0.0, c])
+        d = -float(np.mean(w.points[:, [0, 2]] @ np.array([a, c])))
+        kept.append(Plane(normal=normal, d=d, points=w.points))
+    return kept
+
+
 def _order_by_angle(walls: list[Plane]) -> list[Plane]:
     all_points = np.concatenate([w.points for w in walls], axis=0)
     center = all_points[:, [0, 2]].mean(axis=0)
@@ -109,9 +150,11 @@ def _line_intersection(p: Plane, q: Plane, min_angle_sin: float = 0.15) -> np.nd
     return np.array([x, z])
 
 
-def wall_polygon(walls: list[Plane]) -> list[np.ndarray]:
+def wall_polygon(walls: list[Plane], margin_m: float = 1.0) -> list[np.ndarray]:
     """Return closed polygon corners, or [] if walls don't have enough
-    orientation diversity to form one (all near-parallel, or too few walls)."""
+    orientation diversity to form one (all near-parallel, or too few walls),
+    or if a corner lands outside the observed points plus a margin, which
+    means the walls seen do not enclose a room."""
     if len(walls) < 3:
         return []
 
@@ -123,6 +166,11 @@ def wall_polygon(walls: list[Plane]) -> list[np.ndarray]:
         if corner is None:
             return []
         corners.append(corner)
+
+    all_xz = np.concatenate([w.points[:, [0, 2]] for w in walls], axis=0)
+    lo, hi = all_xz.min(axis=0) - margin_m, all_xz.max(axis=0) + margin_m
+    if any((c < lo).any() or (c > hi).any() for c in corners):
+        return []
     return corners
 
 
