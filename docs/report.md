@@ -24,8 +24,9 @@ capture (phone)  ->  ingest  ->  point cloud + poses  ->  floor, walls, rooms  -
   per capture is `scripts/floorplan.py`.
 
 No learned model is used for geometry. VGGT-1B supplies point maps and camera
-poses for the photo and video tiers, OWLv2 supplies damage detections. Both are
-disclosed in every plan.json (`source_tier`, `damage.detector`).
+poses for the photo and video tiers, MoGe-2 supplies metric scale when no poses
+exist, OWLv2 and Qwen3-VL-2B supply damage regions. All are disclosed in every
+plan.json (`source_tier`, `scale_used`, `damage.detector`).
 
 ## 2. Tier design and device matrix
 
@@ -33,8 +34,8 @@ disclosed in every plan.json (`source_tier`, `damage.detector`).
 |---|---|---|---|
 | LiDAR | Stray Scanner export: depth 256x192 at 60 fps, confidence, ARKit poses | ARKit depth and poses | iPhone 12 Pro or newer Pro, iPad Pro |
 | depth (Android) | web page, WebXR depth sensing, ARCore | ARCore depth and VIO poses | ARCore phones, Chrome 107+ |
-| video | rgb.mp4 or Camera app clip, 2 frames per second, VGGT in 16-frame chunks | recorded poses (Stray, web page) or, without them, relative scale | any phone; iPhone 15+ per the brief |
-| photos | 6 to 8 stills per room, VGGT per room | recorded poses, or relative scale | any phone |
+| video | rgb.mp4 or Camera app clip, 2 frames per second, VGGT in 16-frame chunks | recorded poses (Stray, web page) or MoGe-2 metric depth | any phone; iPhone 15+ per the brief |
+| photos | 6 to 8 stills per room, VGGT per room | recorded poses, or MoGe-2 metric depth with EXIF field of view | any phone |
 
 Honest accuracy per tier, measured so far (see docs/benchmark.md):
 
@@ -70,14 +71,17 @@ Where the centimetres go, largest first:
 
 1. Scale, view-model tiers: VGGT is relative. Poses fix it when they exist; on a
    rotate-in-place capture the pose fit was 40 percent off, on a walking capture
-   the per-chunk fit is within 10 to 15 percent. Without poses a monocular
-   metric anchor (MoGe-2) is the plan, not yet built.
+   the per-chunk fit is within 10 to 15 percent. Without poses MoGe-2 anchors
+   the scale: within 2 percent of the tape on frames that see a whole wall, 10
+   to 25 percent low on close-ups, 12 to 14 percent low overall on the bedroom
+   without EXIF field of view.
 2. Depth fill on textureless surfaces (ARCore): smooth depth invents flat
    surfaces on ceilings and floors. Detected and rejected by plane tilt, but it
    removes the ceiling from the depth tier entirely.
-3. Wall band thickness: RANSAC fits the middle of a 20 to 50 cm noisy band, so
-   room dimensions come out 5 to 15 percent small on ARCore. LiDAR bands are 3
-   to 8 cm.
+3. Wall band thickness: RANSAC fits the middle of a 30 to 66 cm noisy band on
+   ARCore, so room dimensions came out 8 to 14 percent small. The fix loop moves
+   thick bands to their outer face, leaving 1 to 2 percent. LiDAR bands are 3
+   to 8 cm and untouched.
 4. Room polygon from free space: the polygon follows the inner face of the wall
    band. Systematic inward bias of about half the band thickness.
 5. Ceiling height: floor and ceiling are textureless, so they are the last
@@ -125,6 +129,6 @@ one exists for the photo.
   points outside the room, which the outermost-wall rule can pick up.
 - Low light: ARCore and VGGT degrade, LiDAR does not.
 - Sloped or multi-level ceilings: one height per room.
-- Damage detector: OWLv2 false positives on shadows at low scores, filtered by
-  score and physical size; untested on real staged damage until the benchmark
-  capture.
+- Damage detector: tested on one real crack (Cozmo sample) and one undamaged
+  room. Water stains, mould and peeling paint have not been seen in any test
+  image; the classifier's behaviour on them is untested.
