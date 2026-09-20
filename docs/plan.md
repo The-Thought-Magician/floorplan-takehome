@@ -171,6 +171,24 @@ open plans split arbitrarily; doorway widths from region contact overshoot when
 the shared wall was not scanned; no windows to the outside are verified against
 tape.
 
+### 5.1 Openings from appearance (2026-09-20)
+
+The bedroom door and window were closed during capture. A closed door or window
+sits in the wall plane, so the gap-based detector sees wall, and every capture
+scored MISS against the tape (door opening 106.7 cm, window 132.1 cm). Fix: the
+same OWLv2 plus Qwen3-VL-2B path used for damage now detects doors and windows
+in the photos, casts the box's left and right edges onto the wall plane for
+position and width, merges sightings on the same wall within 70 cm, drops
+implausible widths (door 60 to 130 cm, window 40 to 260 cm), and with four or
+more photos requires two sightings, which removed five phantoms on the bedroom.
+
+Result on the bedroom: the window is found on the right wall from five photos at
+78 cm; the curtains cover both edges and the detector measures the exposed
+grille, so 54 cm short. The door was seen in one photo at 75 cm and dropped by
+the two-sightings rule. Openings gate on this room: 0 of 2 within 2 cm, one
+detected, one missed, no phantoms. Photo-detected openings carry
+`source: photo` so a reviewer can tell them from geometric ones.
+
 ## 6. Drift accountability
 
 Heading drift is measured as the deviation of each 5 second window's dominant

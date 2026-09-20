@@ -21,7 +21,7 @@ the benchmark capture), not attempted.
 | Dimensioned per-room plan with walls | rooms.py, plane_extraction.py | plan.json rooms[].polygon_cm, wall_lengths_cm | done |
 | Ceiling height | rooms.py `room_heights`, pipeline.py | rooms[].wall_height_cm, height_source | done, gate not met |
 | Floor area | rooms.py | rooms[].area_m2 | done |
-| Openings | rooms.py `wall_openings` (doors, windows), adjacency contacts (doorways) | rooms[].openings | done, unverified against tape |
+| Openings | rooms.py `wall_openings` (gaps), damage.py `detect_openings` (closed doors and windows from photos), adjacency contacts | rooms[].openings | done; bedroom: window found 54 cm short (curtains), door missed |
 | Stitched multi-room plan with adjacency | rooms.py `segment_rooms` | plan.json adjacency, plan.png | done on 3 sample scans |
 | Per-surface damage regions with class and metric extent | damage.py (OWLv2 localizer + Qwen3-VL-2B crop classifier) | damage.json regions | done: sample crack labelled crack, undamaged bedroom zero regions |
 | Concealed-damage flags with the rule that fired | damage.py `CONCEALED_RULES`, `flag_concealed` | damage.json concealed_flags | done |
@@ -40,7 +40,7 @@ the benchmark capture), not attempted.
 | Same rooms at all three tiers | pipeline.py `process_stray_scan` runs all three on one scan | summary.json | done on samples, pending on user rooms |
 | One room captured twice, same tier | 8 bedroom captures at the depth tier, 1 closes; 2 at the photo tier agree within 3.9 percent | docs/benchmark.md repeatability | partial: FAIL, the finding is that sparse captures do not close |
 | Laser or tape ground truth, raw data submitted | data/ground_truth/*.json, data/captures, data/sample | files | partial: one room so far |
-| Opening widths gate (2 cm on 85 percent) | scripts/benchmark.py | docs/benchmark.md | pending ground truth |
+| Opening widths gate (2 cm on 85 percent) | scripts/benchmark.py | docs/benchmark.md | FAIL on the bedroom: 1 of 2 detected, 0 within 2 cm |
 | Ceiling height gate (1.5 cm, spread 1 cm) | scripts/benchmark.py | docs/benchmark.md | FAIL on bedroom (-10.6 cm at depth tier) |
 | Repeatability gate (1 cm or 0.5 percent) | scripts/benchmark.py | docs/benchmark.md | pending second capture |
 | Drift accountability with on/off ablation | drift.py, pipeline.py | plan.json diagnostics.drift, plan_depth_drift_off.png, docs/benchmark.md | done (yaw correction, orientation only) |

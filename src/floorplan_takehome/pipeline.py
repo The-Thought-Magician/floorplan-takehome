@@ -442,6 +442,11 @@ def run_damage_for_capture(capture_dir: Path, plan: dict, backend: str | None = 
 
     g = plan.get("diagnostics") or {}
     result = run_damage(sorted(photo_poses), photo_poses, plan["rooms"], g.get("floor_y"), g.get("ceiling_y"), depth_lookup, backend)
+    from floorplan_takehome.damage import detect_openings, merge_openings
+
+    openings = detect_openings(sorted(photo_poses), photo_poses, plan["rooms"], g.get("floor_y"), g.get("ceiling_y"), depth_lookup)
+    merge_openings(plan, openings)
+    result["openings_from_photos"] = openings
     (capture_dir / "damage.json").write_text(json.dumps(result, indent=2))
     plan["damage"] = {k: v for k, v in result.items() if k != "raw_detections"}
     (capture_dir / "plan.json").write_text(json.dumps(plan, indent=2, default=str))
@@ -474,6 +479,11 @@ def run_damage_for_stray(scan_dir: Path, out_dir: Path, plan: dict, backend: str
     photo_poses = {paths[i]: (proj, known[i]) for i in keep}
     g = plan.get("diagnostics") or {}
     result = run_damage(sorted(photo_poses), photo_poses, plan["rooms"], g.get("floor_y"), g.get("ceiling_y"), None, backend)
+    from floorplan_takehome.damage import detect_openings, merge_openings
+
+    openings = detect_openings(sorted(photo_poses), photo_poses, plan["rooms"], g.get("floor_y"), g.get("ceiling_y"), None)
+    merge_openings(plan, openings)
+    result["openings_from_photos"] = openings
     (out_dir / "damage.json").write_text(json.dumps(result, indent=2))
     plan["damage"] = {k: v for k, v in result.items() if k != "raw_detections"}
     (out_dir / "plan.json").write_text(json.dumps(plan, indent=2, default=str))

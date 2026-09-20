@@ -52,18 +52,30 @@ def detector_backend() -> str:
     return "owlv2"
 
 
-def detect_owlv2(image_paths: list[str], threshold: float = 0.25, verify: bool = True) -> dict[str, list[dict]]:
+OPENING_CLASSES = {
+    "door": ["a door", "closed interior door", "door frame with a door"],
+    "window": ["a window", "window with curtains", "window frame"],
+}
+OPENING_PROMPT = (
+    "This is a crop from a photo of an interior wall. Does it show a door or a window? "
+    "Answer with exactly one word: door, window, none. Wardrobes, mirrors, pictures and shelves are none."
+)
+
+
+def detect_owlv2(image_paths: list[str], threshold: float = 0.25, verify: bool = True,
+                 classes: dict | None = None, vlm_prompt: str | None = None) -> dict[str, list[dict]]:
     """Open-vocabulary detection. Returns per image a list of {class, score, box} with box in
     normalized [x0, y0, x1, y1] image coordinates."""
     import torch
     from PIL import Image
     from transformers import Owlv2ForObjectDetection, Owlv2Processor
 
+    classes = classes or CLASSES
     device = "cuda" if torch.cuda.is_available() else "cpu"
     processor = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
     model = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(device).eval()
-    prompts = [p for ps in CLASSES.values() for p in ps]
-    prompt_class = [c for c, ps in CLASSES.items() for _ in ps]
+    prompts = [p for ps in classes.values() for p in ps]
+    prompt_class = [c for c, ps in classes.items() for _ in ps]
 
     results = {}
     for path in image_paths:
@@ -92,7 +104,7 @@ def detect_owlv2(image_paths: list[str], threshold: float = 0.25, verify: bool =
     if device == "cuda":
         torch.cuda.empty_cache()
     if verify:
-        results = verify_with_vlm(results)
+        results = verify_with_vlm(results, prompt=vlm_prompt or VLM_PROMPT, labels=set(classes))
     return results
 
 
@@ -104,7 +116,7 @@ VLM_PROMPT = (
 )
 
 
-def verify_with_vlm(results: dict[str, list[dict]], margin: float = 0.2) -> dict[str, list[dict]]:
+def verify_with_vlm(results: dict[str, list[dict]], margin: float = 0.2, prompt: str = VLM_PROMPT, labels: set | None = None) -> dict[str, list[dict]]:
     """Second stage: a small vision-language model classifies each candidate crop.
     Regions the model calls none are dropped, the others take the model's class."""
     import torch
@@ -127,7 +139,7 @@ def verify_with_vlm(results: dict[str, list[dict]], margin: float = 0.2) -> dict
             if min(crop.size) < 32:
                 continue
             crop.thumbnail((896, 896))
-            messages = [{"role": "user", "content": [{"type": "image", "image": crop}, {"type": "text", "text": VLM_PROMPT}]}]
+            messages = [{"role": "user", "content": [{"type": "image", "image": crop}, {"type": "text", "text": prompt}]}]
             inputs = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt").to(device)
             with torch.no_grad():
                 out = model.generate(**inputs, max_new_tokens=6, do_sample=False)
@@ -135,7 +147,7 @@ def verify_with_vlm(results: dict[str, list[dict]], margin: float = 0.2) -> dict
             answer = answer.replace(" ", "_").strip(".,")
             f["vlm_answer"] = answer
             f["detector_class"] = f["class"]
-            if answer in CLASSES:
+            if answer in (labels or set(CLASSES)):
                 f["class"] = answer
                 kept.append(f)
         results[path] = _merge_overlaps(kept)  # boxes that became the same class merge into one region
@@ -292,6 +304,26 @@ def localize(detections: dict[str, list[dict]], photo_poses: dict[str, tuple[np.
             if hit is None:
                 continue
             surface, point, dist, room_id = hit
+            along_cm = None
+            edge_width_cm = None
+            if surface.startswith("wall"):
+                room = next(r for r in rooms if r["id"] == room_id)
+                room_poly = np.array(room["polygon_cm"], dtype=float) / 100.0
+                wi = int(surface.split("-")[1])
+                a, b = room_poly[wi], room_poly[(wi + 1) % len(room_poly)]
+                dvec = (b - a) / (np.linalg.norm(b - a) + 1e-9)
+                along_cm = round(float((np.array([point[0], point[2]]) - a) @ dvec) * 100, 1)
+                # width along the wall from the box's left and right edges cast onto the same wall
+                # plane: exact for oblique views where the angular width at the centre distance is not
+                edges = []
+                for u in (x0, x1):
+                    o2, d2 = _ray((u, cv), proj, c2w)
+                    h2 = _hit_room_surface(o2, d2, room, floor_y, ceiling_y)
+                    if h2 and h2[0] == surface:
+                        edges.append(float((np.array([h2[1][0], h2[1][2]]) - a) @ dvec))
+                if len(edges) == 2:
+                    edge_width_cm = round(abs(edges[1] - edges[0]) * 100, 1)
+                    along_cm = round(min(edges) * 100, 1)
             if depth_lookup is not None:
                 depth = depth_lookup(path, cu, cv)
                 if depth:
@@ -314,6 +346,8 @@ def localize(detections: dict[str, list[dict]], photo_poses: dict[str, tuple[np.
                     "area_m2": round(width_m * height_m, 3),
                     "photo": str(path),
                     "box": d["box"],
+                    "along_wall_cm": along_cm,
+                    "wall_width_cm": edge_width_cm if edge_width_cm is not None else round(width_m * 100, 1),
                 }
             )
     return regions
@@ -391,3 +425,58 @@ def run_damage(image_paths: list[str], photo_poses, rooms, floor_y, ceiling_y, d
         "concealed_flags": flag_concealed(regions, rooms),
         "scope_items": scope_items(rooms, regions),
     }
+
+
+def detect_openings(image_paths: list[str], photo_poses, rooms, floor_y, ceiling_y, depth_lookup=None) -> dict[str, list[dict]]:
+    """Doors and windows from appearance, for the closed ones geometry cannot see.
+
+    Same detector and verifier as damage, then the box is cast onto the wall for
+    position and width. Sightings of the same opening from several photos (same
+    wall, centres within 60 cm) merge into one, width as the median. Returns
+    openings per room id in the plan's openings format, with source "photo".
+    """
+    detections = detect_owlv2(image_paths, threshold=0.2, classes=OPENING_CLASSES, vlm_prompt=OPENING_PROMPT)
+    regions = [r for r in localize(detections, photo_poses, rooms, floor_y, ceiling_y, depth_lookup) if r["surface"].startswith("wall")]
+    PLAUSIBLE = {"door": (60.0, 130.0), "window": (40.0, 260.0)}
+    per_room: dict[str, list[dict]] = {}
+    for r in regions:
+        width = r["wall_width_cm"]
+        lo, hi = PLAUSIBLE[r["class"]]
+        if not (lo <= width <= hi):
+            continue
+        group = per_room.setdefault(r["room"], [])
+        wall = int(r["surface"].split("-")[1])
+        start = r["along_wall_cm"] or 0.0
+        centre = start + width / 2
+        for g in group:
+            if g["wall"] == wall and g["kind"] == r["class"] and abs(float(np.median(g["_centres"])) - centre) < 70:
+                g["_widths"].append(width)
+                g["_centres"].append(centre)
+                g["sightings"] += 1
+                break
+        else:
+            group.append({"wall": wall, "kind": r["class"], "_widths": [width], "_centres": [centre], "sightings": 1, "score": r.get("score")})
+    out = {}
+    total_photos = len(image_paths)
+    for room_id, group in per_room.items():
+        out[room_id] = []
+        for g in group:
+            # with several photos of the room a real opening is seen more than once
+            if total_photos >= 4 and g["sightings"] < 2:
+                continue
+            width = float(max(g["_widths"]))  # partial views underestimate, the fullest view is the best
+            centre = float(np.median(g["_centres"]))
+            out[room_id].append({"wall": g["wall"], "kind": g["kind"], "from_corner_cm": round(centre - width / 2, 1), "width_cm": round(width, 1), "source": "photo", "sightings": g["sightings"], "to": None})
+    return out
+
+
+def merge_openings(plan: dict, photo_openings: dict[str, list[dict]]) -> None:
+    """Add photo-detected openings to each room, keeping geometric ones and not duplicating them."""
+    for room in plan.get("rooms", []):
+        extra = photo_openings.get(room["id"], [])
+        existing = [o for o in room.get("openings", []) if o.get("source") != "photo"]
+        for o in extra:
+            dup = any(e.get("wall") == o["wall"] and e.get("kind") == o["kind"] and abs((e.get("from_corner_cm") or 0) - o["from_corner_cm"]) < 60 for e in existing)
+            if not dup:
+                existing.append(o)
+        room["openings"] = existing
