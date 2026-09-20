@@ -1,5 +1,9 @@
 # Floor plan reconstruction: research and architecture plan
 
+Revised 2026-09-20 after a verification pass: every model, API, and hardware
+claim below was checked against a primary source (README, spec, chromestatus,
+GitHub issue) or run on the actual laptop. Items still unverified are marked.
+
 ## Problem
 
 Input: phone camera captures of a room or property, in one of three tiers.
@@ -12,323 +16,323 @@ Tiers, in order of increasing raw signal quality:
 2. Video: a continuous handheld walkthrough.
 3. Sensor-assisted depth: real-time depth captured at record time, not
    reconstructed after the fact. LiDAR on Apple Pro devices (ARKit scene
-   reconstruction), or ARCore Depth API depth-from-motion on Android. Kept the
-   name "LiDAR" in the rest of this doc for brevity, but the pipeline is the
-   same for either source, see below.
+   reconstruction), or ARCore Depth API depth-from-motion on Android. Called
+   the "depth tier" below, the pipeline is the same for either source.
+
+## Local hardware (verified)
+
+- Laptop: RTX 5050 Laptop GPU, 8GB VRAM, Blackwell sm_120, 15GB RAM, 12
+  cores, WSL2. CUDA works inside WSL2 (`nvidia-smi` and torch both see it).
+- `torch 2.14.0+cu130` installed via uv, `torch.cuda.is_available()` True,
+  arch list includes sm_120, bf16 matmul and `scaled_dot_product_attention`
+  run on the card. This is the whole attention stack we can rely on:
+  - flash-attn: no official sm_120 wheel, source build fails (Dao-AILab
+    issues 2361, 2168). Do not install.
+  - xformers: official wheels stop at sm_90 (issue 1279) and installing it
+    can downgrade torch to a non-sm_120 build. Do not install, even where a
+    README says to (DA3, MUSt3R, UniDepth).
+  - cuDNN SDPA backend can fail on Blackwell, call
+    `torch.backends.cuda.enable_cudnn_sdp(False)` at process start.
+- Phone: Android, Chrome, ARCore. Depth tier tested end to end on the real
+  device (see capture page section).
 
 ## Common output schema
 
-All three tiers should converge on the same output representation, so downstream
-consumers (Xactimate-style estimate generation) do not care which tier produced it:
+All three tiers converge on one output so downstream consumers (Xactimate-style
+estimate generation) do not care which tier produced it. Implemented in
+`pipeline.reconstruct`:
 
 ```
 FloorPlan
   rooms: list[Room]
+  diagnostics: points, planes, walls, closed, wall_lines
+  capture: photos, video (what came in the upload)
 Room
   id, label
-  polygon: list[(x_cm, y_cm)]   # wall corners, closed loop, in a shared world frame
-  wall_height_cm: float
-  openings: list[Opening]        # doors, windows: wall_id, position, width_cm
-  confidence: float              # per-room reconstruction confidence
-  source_tier: photos | video | lidar
+  polygon_cm: list[(x_cm, z_cm)]   # wall corners, closed loop, shared world frame
+  wall_lengths_cm, area_m2, perimeter_m
+  wall_height_cm: float | null     # ceiling plane minus floor plane
+  openings: list[Opening]          # doors, windows: not implemented yet
+  confidence: float                # wall inliers / total points, 0 when not closed
+  source_tier: photos | video | depth
 ```
 
-A single schema means the reconstruction algorithm can change per tier while the
-rest of the system (rendering, estimate generation, QA review) stays fixed.
+## Tier 3: depth capture (Android ARCore today, ARKit LiDAR later)
 
-## Tier 3: LiDAR (and its Android equivalent)
+Highest confidence, built first.
 
-Highest confidence, build this first.
+Device coverage:
 
-Most customers will not have an Apple Pro device. LiDAR (`ARMeshAnchor`,
-`sceneDepth`) is exclusive to iPhone/iPad Pro models, non-Pro iPhones have no
-software fallback for it in ARKit, this is a hard hardware gate on iOS.
+- LiDAR is exclusive to iPhone/iPad Pro. Non-Pro iPhones have no on-device
+  metric depth, they fall through to the photo/video pipeline.
+- ARCore Depth API needs no special hardware, depth-from-motion covers most
+  ARCore-certified Android devices. Pose tracking is metric (VIO).
+- iOS Safari does not support WebXR `immersive-ar` (Apple forums thread
+  756850, still true through Safari 26.6). No iOS browser can, they all use
+  WebKit. iOS needs a native app or App Clip wrapper. Not in scope.
 
-Android does not need special hardware for the equivalent. ARCore's Depth API
-computes depth-from-motion from a single moving camera fused with IMU, no ToF
-sensor required, and covers roughly 88 percent of active ARCore-certified
-Android devices (400+ models: Samsung, Pixel, OnePlus, Xiaomi, and others,
-Android 7.0+). Its pose tracking is confirmed metric-scale (camera plus IMU
-visual-inertial odometry, benchmarked around 1.6-4cm indoor position error),
-which is the same class of accuracy this whole project is targeting. The
-depth values themselves inherit that scale since they come from the same
-tracked camera poses, though Google's own docs describe the depth-specific
-accuracy qualitatively rather than as a hard confirmed number, worth verifying
-directly against a tape measure like everything else in this plan.
+### Capture page (web-capture/index.html)
 
-So tier 3 in practice has two real sources feeding the same pipeline: ARKit
-LiDAR on Apple Pro devices, ARCore Depth API on most Android devices. Non-Pro
-iPhones are the one real gap, no on-device metric depth exists there, capture
-from those falls through to the tier 1/2 feed-forward pipeline instead.
+Chrome on Android exposes ARCore to a plain web page through WebXR, no app
+install. Verified against the spec, chromestatus, and Chromium source:
 
-Capture path on Android needs no installed app. Chrome's WebXR Depth Sensing
-module ships (not experimental) ARCore's Depth API directly to a website via
-`navigator.xr.requestSession()`, no native app to build or ask the customer to
-install. Google Play Services for AR, the ARCore runtime itself, auto-installs
-in the background the first time it is needed, the user never has to find or
-install it manually. No off-the-shelf third-party app does real ARCore depth
-capture in a usable form either (checked: the closest comparable app,
-SiteScape, is LiDAR-only and explicitly does not support Android), so a
-browser-based capture page is both the least-friction and the only realistic
-path, not a corner cut for lack of a better option. iOS has no equivalent for
-LiDAR in Safari's WebXR support as of this research, native app or a hybrid
-wrapper is still needed there.
+- Depth: `depth-sensing`, shipped Chrome 90. ARCore-backed Chrome only
+  offers `cpu-optimized` usage, `luminance-alpha` or `unsigned-short`
+  formats (uint16 millimetres, `rawValueToMeters` 0.001), and only `smooth`
+  depth. `float32` and `raw` are silently unavailable. Confidence is not
+  exposed. Resolution is ~160x90 (matches the camera aspect), rejected above
+  43,200 pixels, so ToF phones with 640x480 depth may return null (unverified
+  on device).
+- The page now dumps the full `XRCPUDepthInformation.data` buffer per frame
+  (base64) plus `normDepthBufferFromNormView`, instead of a 20x15
+  `getDepthInMeters` grid. That is 14,400 points per frame instead of 300.
+  The coarse grid is still stored and the loader cross-checks the buffer
+  decode against it, falling back to the grid with a warning on mismatch.
+- Photos: `camera-access` (WebXR Raw Camera Access), shipped by default in
+  Chrome 107 for Android. `XRWebGLBinding.getCameraImage(view.camera)`
+  returns an opaque texture valid only inside that frame callback, origin
+  bottom-left. The page reads it back through an FBO, flips, and saves a
+  JPEG on every manual capture, named in the capture record. Camera
+  intrinsics are not exposed, derive them from `projectionMatrix` scaled to
+  the camera image size. Keep `XRWebGLLayer` as the base layer, the Layers
+  API path crashed `getCameraImage` before Chrome 149.
+- Video: `getUserMedia` is not usable while ARCore owns the camera, and the
+  XR framebuffer is opaque so `captureStream` on the XR canvas records
+  nothing. The page draws the camera texture into a second 2D canvas (max
+  1280 wide, larger canvases break MediaRecorder on Android) and records that
+  with `MediaRecorder` (`video/webm;codecs=vp9`, falls back to vp8, mp4).
+  Every drawn frame also stores the XR pose with a timestamp, so the video
+  tier gets metric VIO poses for free when captured through this page. While
+  recording, depth frames are also stored at ~5 fps.
+- Export: JSZip bundle `capture.json` + `photos/NNNN.jpg` + `video.webm`,
+  photos and video each optional via checkbox. Download, or upload straight
+  to the local backend.
+- Metadata: user agent, `userAgentData` model, granted depth format/type,
+  camera-access grant.
 
-Tested directly on a real Android phone in Chrome: the immersive-ar session
-itself starts fine, confirming ARCore and WebXR both work on-device. The
-official `immersive-web/webxr-samples` depth demos (both the CPU and GPU
-variants, `proposals/phone-ar-depth.html` and `phone-ar-depth-gpu.html`) fail
-with a shader compile error, GLSL ES 3.00 syntax (`in`/`out`, `texture()`) in
-a context created as WebGL1. Same failure in both, so it is a bug in those
-samples' context setup, not a device or ARCore limitation. Our own capture
-page needs an explicit `canvas.getContext('webgl2', { xrCompatible: true })`,
-or better, skip rendering entirely and read `XRCPUDepthInformation` values
-directly in JS, since capture only needs the raw depth data, not a live
-visualization.
+### Accuracy expectations
 
-Input: ARKit `ARMeshAnchor` scene mesh or raw `sceneDepth` plus camera poses,
-or ARCore's per-frame depth image plus tracked pose. Both give real-world
-metric scale directly, no scale ambiguity.
+- Google: most accurate between 0.5m and 5m, white walls give imprecise
+  depth. The loader drops points beyond 6m.
+- No Google-published wall-distance error. One independent indoor test
+  (arXiv 2204.01693, OnePlus 6, 160x90 raw depth vs LiDAR) reports MAE in
+  the tens of cm at low confidence thresholds, exact figure not extracted.
+  Treat cm-level accuracy on this tier as unproven until measured against a
+  tape, and expect ToF phones (Pixel with ToF, Samsung Ultra) to do better.
+- Poses are the reliable part (VIO, roughly 1.6-4cm indoor). The walls the
+  camera got close to should be good, far walls will not be.
 
-Pipeline:
-1. Load mesh or depth point cloud, transform into a single world frame using the
-   ARKit-provided camera poses (already solved on-device, no SLAM needed here).
-2. Filter and downsample the point cloud (voxel grid).
-3. Segment the floor plane and ceiling plane (RANSAC plane fitting, Open3D
-   `segment_plane`). Points within a horizontal band between the two give wall
-   candidates.
-4. Segment wall planes from the remaining points (iterative RANSAC, remove each
-   plane's inliers and repeat).
-5. Project wall planes to 2D (top-down), intersect adjacent walls to get corner
-   points, order them into a closed polygon.
-6. Detect openings (doors/windows) as gaps or depth discontinuities in a wall plane.
-7. Compute room area and wall lengths directly from the polygon in metric units.
+### Pipeline (implemented in `depth_capture` + `plane_extraction` + `pipeline`)
 
-Apple's own `RoomPlan` framework already does steps 1 to 6 on-device and outputs a
-USDZ with labeled walls, openings, and dimensions, but it is iOS-only, no Android
-equivalent product exists. This is the actual case for building our own pipeline
-rather than depending on RoomPlan: it is the only option that works on both ARKit
-LiDAR and ARCore depth-from-motion input, plus it gives control over the
-intermediate point cloud (needed for confidence scores, custom room labels, or
-multi-tier fusion) instead of being locked into one platform's capture app.
+1. Unproject each frame's depth into the shared world frame using the
+   per-frame pose and projection matrix (off-centre terms honoured).
+2. Voxel downsample (3cm) and statistical outlier removal.
+3. Iterative RANSAC plane segmentation (Open3D). Planes with a near-vertical
+   normal are floor/ceiling, their height difference is `wall_height_cm`.
+4. Merge wall fragments with the same top-down line, order walls by angle
+   around the centroid, intersect neighbours to get corners.
+5. Emit the schema, a top-down PNG with wall lengths, and a PLY.
+6. Openings (doors/windows) as gaps in a wall plane: not implemented.
+
+Confirmed on two real captures of a furnished room: 3-4 wall planes found,
+polygon does not close because furniture hides part of a wall on one side.
+`wall_polygon` refuses to guess, which is right, but it means pure RANSAC
+fails on realistically furnished rooms. Two fixes, pick one before the real
+assignment: walk close to every wall during capture (cheap, capture
+discipline), or add a learned prior (RoomFormer, below). The full-resolution
+depth buffer (48x more points than the old grid) has not been tested on a
+real capture yet, do that first, it may be enough for RANSAC to see past
+furniture.
 
 ## Tier 2: Video, and Tier 1: Photos
 
-Classic SfM (COLMAP: feature matching, essential matrix, incremental
-reconstruction, bundle adjustment) is the textbook approach here, but it is not
-the current state of the art and not the right default for a fast build. As of
-2024-2025 there is a class of feed-forward transformer models that take
-unordered, unposed images or video frames and directly regress a point cloud
-plus camera poses in a single forward pass, no matching or iterative
-optimization loop at all:
+Classic SfM (COLMAP) is the textbook approach and remains the no-GPU
+fallback. The default is a feed-forward model that regresses a point cloud
+plus camera poses from unordered images in one pass. Verified state as of
+September 2026:
 
-- **VGGT** (Meta, CVPR 2025): 1 to ~200 unordered images in, dense point cloud
-  and poses out, under a second on a GPU. Relative scale only. Runs from a
-  pretrained checkpoint, has a hosted demo (`facebook/vggt` on Hugging Face
-  Spaces).
-- **MASt3R** (Naver): pairwise dense point-map regression plus a matching head,
-  extends DUSt3R with metric-scale recovery. Metric scale out of the box, but
-  a real reported number puts it at 11.8GB for 19 images on an RTX 3080, a
-  confirmed no-go on 8GB at any useful image count, not just an unverified
-  paper figure this time.
-- **MapAnything** (Meta, 2025): unified feed-forward model, explicitly built
-  for metric 3D reconstruction, optionally takes known calibration/poses/depth
-  as extra input if available and folds it in. Apache 2.0, weights on Hugging
-  Face (`facebook/map-anything-v1`). No consumer VRAM number in its own README
-  at all, only a 2000-views-on-140GB memory-efficient-mode figure, no way to
-  extrapolate to 8GB from that.
-- **MUSt3R** (Naver, CVPR 2025, DUSt3R successor): 5x lighter and an order of
-  magnitude faster than DUSt3R at similar accuracy. A 2025 survey benchmarks
-  MUSt3R-224 at 4.1GB and MUSt3R-512 at 8.1GB, real headroom under 8GB rather
-  than borderline, though still an A100 figure, not a confirmed consumer-card
-  number. Pip-installable, pretrained checkpoints included. Scale: not stated
-  as metric anywhere found, same lineage as DUSt3R/VGGT, assume relative and
-  pair with a DepthPro anchor unless proven otherwise.
-- **Fast3R** (Meta, CVPR 2025): all-images-at-once generalization of DUSt3R,
-  scales to 1000+ images, very fast, relative scale.
+| Model | Metric | Poses | License | 8GB evidence | Attention deps |
+|---|---|---|---|---|---|
+| VGGT-1B via `harry7557558/vggt-low-vram` | no | yes | FAIR non-commercial (commercial ckpt by application) | 25 imgs 3.5GB, 125 imgs 5.8GB, 150 imgs on an RTX 5070 Laptop 8GB, CUDA 12.8, torch 2.7.1 | none |
+| MapAnything (`facebook/map-anything-apache`) | yes | yes | Apache 2.0 weights available | none published, 1B params, likely tens of frames per pass | none |
+| Depth Anything 3 (DA3, ByteDance, Nov 2025) | yes via DA3METRIC-LARGE / nested | yes | Small/Base/Metric-L Apache, Giant/Large-1.1 non-commercial | streaming mode 11.5-28GB peak, 24GB OOM over 100 imgs, no 8GB figure | README says `pip install xformers`, see hardware section |
+| VGGT-Omega (Meta, May 2026) | no | yes | FAIR non-commercial, gated | A100: 25 frames 7.8GB, ~30% of VGGT memory | none |
+| Pi3 / Pi3X (Dec 2025) | Pi3X approximate | yes | code BSD, weights CC BY-NC | none published | none |
+| MUSt3R (Naver) | not stated | yes | non-commercial | none on consumer cards (the 4.1GB figure was an A100 survey number) | xformers recommended |
+| MASt3R | yes | yes | CC BY-NC-SA | 11.8GB for 19 images on a 3080, no-go | |
+| AMB3R (CVPR 2026) | yes | yes | | pins torch 2.5 + flash-attn 2.7.3, no-go on sm_120 | flash-attn |
+| LingBot-Map (ECCV 2026, Apache) | no | yes | Apache | user OOM at 16GB | FlashInfer with SDPA fallback |
 
-This is a real workaround, not a minor optimization: COLMAP needs enough
-pairwise feature overlap and minutes to hours of matching plus bundle
-adjustment; VGGT/MapAnything need no matching step, no ordering, and run in
-under a second to seconds per capture. For a sparse, unordered photo set this
-directly removes the failure mode that made the photo tier "best-effort" in a
-COLMAP-based design: COLMAP fails outright when two photos of the same room
-do not share enough matched features, feed-forward models degrade gracefully
-instead because they never depend on explicit pairwise matches.
+Corrections to the previous version of this plan:
 
-Plan: use MUSt3R-224 (confirmed real headroom under 8GB) or `vggt-low-vram`
-as the default reconstruction backend for both the photo and video tiers on
-the local 8GB card. MapAnything and MASt3R are named because they are the
-strongest metric-scale candidates on paper, but neither has real 8GB evidence
-and MASt3R now has a directly disconfirming one, so they are a fallback to
-test only if the 8GB-confirmed options come up short on accuracy, not the
-first thing to reach for. Video frames are just a densely sampled, ordered
-image set to this class of model, so one backend covers both tiers, the only
-difference is frame extraction (fixed interval sampling with a parallax check
-for video) versus using photos directly.
+- MUSt3R-224 was the default on the strength of a 4.1GB benchmark. That
+  number is from an A100 survey, not a consumer card, and MUSt3R recommends
+  xformers, which is not usable on this GPU. Demoted to "try if VGGT falls
+  short".
+- `vggt-low-vram` is the only backbone with a published number on an 8GB
+  Blackwell laptop, nearly identical to this one. It is the default.
+- MapAnything now has an Apache-licensed checkpoint (Jan 2026), and it is
+  metric out of the box. It is the second option and the one to prefer if
+  the take-home needs a commercially clean license or drops the scale anchor.
+- Depth Pro (Oct 2024) as the scale anchor is superseded. MoGe-2 (Jul 2025,
+  MIT code, commercial weights, metric depth plus intrinsics from one image)
+  reports lower metric error than Depth Pro, UniDepth, and Metric3Dv2 in its
+  paper. MoGe-3 (Aug 2026, same repo) exists but has no independent indoor
+  numbers yet. DA3METRIC-LARGE (Apache) is the alternative.
+- PolyRoom has no license file and sits on an MMDetection stack. RoomFormer
+  (MIT, weights released, density-map in, polygons out) is the learned floor
+  plan model to reach for, with the caveat that its deformable-attention CUDA
+  ops are torch 1.9 era and need a rebuild for sm_120 (unverified).
+  SpatialLM 1.1 (Qwen 0.5B, Apache) does walls/doors/windows straight from a
+  point cloud but needs flash-attn, so it is out on this GPU.
+- Nothing released between January and September 2026 supersedes the above
+  for an 8GB card. No MapAnything v2 or Depth Anything 4 exists.
 
-Scale: none of the 8GB-confirmed options (MUSt3R, VGGT) are metric out of the
-box, both are relative-scale by lineage. Fix with a metric depth anchor: run a
-single-image metric depth model (Apple **DepthPro**, or **UniDepth**, or
-**Metric3D v2**, all give true-scale depth from one frame with no calibration
-needed) on one reference frame and rescale the point cloud to match. This is a
-cleaner scale fix than the old IMU-fusion/known-object approach: it needs no
-capture-time cooperation from the user and no assumption about what is in
-frame. If MapAnything or MASt3R get tested later and their metric claim holds
-up, the DepthPro anchor step can be dropped for those paths.
+Plan: `vggt-low-vram` as the backbone for both tiers, bf16, SDPA only, chunk
+video into 30-60 keyframes with overlap (VGGT-Long pattern) if a capture
+exceeds ~150 frames. Video frames are an ordered, densely sampled image set
+to the model, so one backend covers both tiers, the only difference is frame
+extraction (fixed interval plus a parallax check for video).
 
-Once a point cloud and poses exist, from either tier, the plane-fitting and
-polygon-extraction step is shared with the LiDAR tier below. Also worth
-building toward: **PolyRoom** (ECCV 2024 lineage), a transformer that goes
-directly from a point cloud to a clean vectorized floor-plan polygon, built
-specifically to fix the corner/angle/self-intersection errors that hand-rolled
-RANSAC plane intersection produces. Start with the RANSAC-based extractor
-since it is faster to get working, treat PolyRoom as the upgrade path.
+Scale:
 
-Multi-room stitching ("stitched" floor plans): this whole model class handles
-it natively for a single continuous capture since all frames go through one
-forward pass into one shared point cloud, no separate loop-closure step
-needed the way classic SLAM requires it.
+- Video captured through our page: use the recorded VIO poses. Fit a
+  similarity transform from VGGT's relative camera centres to the ARCore
+  camera centres, that gives metric scale with no monocular model at all.
+- Plain video or photos from any other source: MoGe-2 ViT-L on 3-5 frames,
+  median ratio of MoGe depth to VGGT depth is the scale factor. Or run
+  MapAnything and take its metric output directly.
+- Whichever path: verify against a tape measure first, before trusting any
+  paper number.
 
-Libraries: `must3r` (pip-installable, pretrained checkpoints) and
-`harry7557558/vggt-low-vram` as the primary 8GB-viable options, `map-anything`
-kept installed as the metric-scale fallback to test. OpenCV for frame
-extraction and any lightweight preprocessing, Open3D for plane fitting on the
-resulting point cloud. COLMAP is not required for the default path, keep it
-noted as a fallback only if every feed-forward option fails to load or is
-unavailable in the actual take-home environment.
+Once a point cloud and poses exist, plane fitting and polygon extraction are
+shared with the depth tier. Multi-room stitching for a single continuous
+capture is native to this model class, all frames share one forward pass.
+
+### Photo and video tiers: first real run (2026-09-20)
+
+Implemented in `multiview.py`, wired into `pipeline.process_image_tiers`, runs
+after the depth plan on every upload. Measured on the furnished-room capture:
+
+| tier | images | peak VRAM | result |
+|---|---|---|---|
+| photos | 10 (851x1920, crop mode 518x518) | 5.0GB | closed rectangle, 258 x 217 cm |
+| video | 38 (1 fps frames + 10 photos as anchors) | 5.6GB | closed rectangle, 269 x 197 cm |
+| depth | 145 ARCore frames | n/a | closed rectangle, 393 x 314 cm |
+
+- VGGT-1B via the low-VRAM fork runs on the RTX 5050 in bf16 with SDPA.
+  `TORCH_COMPILE_DISABLE=1` is required, the fork decorates layers with
+  `torch.compile` and this machine has no Python headers for the Triton
+  build. Weight download needs `HF_HUB_DISABLE_XET=1`, the Xet path stalled.
+- VGGT geometry is much cleaner than ARCore depth: thin walls, no fill on
+  white surfaces, the rectangle fits the point band exactly.
+- Scale is the open problem. Three estimates disagree:
+  - camera-pose alignment (orientation Procrustes + median pairwise distance
+    ratio against ARCore poses of the 10 photos): 1.38. Position residual
+    34cm median on a 1m path, so this is weak. VGGT translation on a
+    rotate-in-place capture is noisy.
+  - ARCore depth vs VGGT depth pixel by pixel on the same 10 photos: 2.49
+    median, but per frame from 2.0 to 3.8. Either ARCore depth or VGGT's
+    per-frame depth is not self-consistent across frames.
+  - depth tier rectangle is 1.5x the photo tier rectangle.
+- Aspect ratios agree (1.19, 1.37, 1.25), so the geometry is right and only
+  the scalar is unresolved. A tape measure of two walls decides it. Until
+  then no tier can be called cm-accurate.
+- Fix for the pose-based scale: capture photos while walking, not rotating.
+  A 3m baseline gives VGGT translations that a similarity fit can trust.
 
 ## Scale strategy summary
 
 | tier | scale source |
 |---|---|
-| LiDAR (Apple Pro) | ARKit metric depth, exact |
-| depth-from-motion (Android) | ARCore VIO-fused metric depth, verify accuracy |
-| video | MUSt3R/VGGT relative output, fixed with a DepthPro anchor |
-| photos | MUSt3R/VGGT relative output, fixed with a DepthPro anchor |
+| depth (ARKit LiDAR) | ARKit metric depth, exact |
+| depth (Android ARCore) | ARCore VIO-fused metric depth, accuracy unverified |
+| video via our capture page | ARCore VIO poses recorded alongside the video |
+| video from elsewhere | VGGT relative output, MoGe-2 anchor or MapAnything |
+| photos | VGGT relative output, MoGe-2 anchor or MapAnything |
 
 ## Architecture
 
 ```
-capture ingestion  ->  tier detection  ->  reconstruction  ->  plane/polygon extraction  ->  schema output  ->  render / export
+phone (Chrome, WebXR)  --zip over https-->  local backend (FastAPI)  -->  pipeline  -->  plan.json + plan.png
 ```
 
-- Capture ingestion: accepts a folder of images, a video file, or an ARKit export
-  bundle. Normalizes into frames + optional depth + optional poses.
-- Tier detection: based on what's present in the capture (depth data present means
-  LiDAR tier, single video file means video tier, loose image set means photo tier).
-- Reconstruction: tier-specific module (three separate implementations sharing a
-  point-cloud-out interface).
-- Plane and polygon extraction: shared across all three tiers, operates on a point
-  cloud plus (if available) camera poses.
-- Schema output: the `FloorPlan` structure above, tier-tagged and confidence-scored.
-- Render/export: 2D floor plan image, dimension overlay, and a machine-readable
-  export (JSON) for downstream estimate generation.
-
-Module boundaries matter here because the interesting long-term work (per the JD)
-is the data layer: every capture should produce structured points that outlive the
-one-off reconstruction, not just a picture of a floor plan.
+- Capture page: served by the backend at `/`. Depth, photos, video, poses in
+  one zip. Optional pieces are checkboxes.
+- Backend (`server.py`): `POST /api/captures` takes the zip, validates it
+  (path traversal check, size cap, must contain `capture.json`), unpacks to
+  `data/captures/<id>/`, runs the pipeline in a thread. `GET
+  /api/captures/<id>` polls status and returns the plan, `plan.png` renders
+  the top-down view. The page polls and shows the result in the overlay.
+- Cloudflare: `scripts/serve.sh` starts uvicorn on 127.0.0.1:8000 and a
+  `cloudflared` quick tunnel in front of it. The phone opens the printed
+  `trycloudflare.com` URL. WebXR requires a secure context, the tunnel gives
+  https with zero config and nothing leaves the laptop except the tunnel.
+  Quick tunnels are ephemeral and unauthenticated, fine for a demo, a named
+  tunnel with Access in front is the production version.
+- Pipeline (`pipeline.py`): capture directory in, schema out, shared by the
+  server and a future CLI. Tier detection is trivial today (depth tier only),
+  photos and video in the zip are recorded but not yet reconstructed.
+- Module boundaries: `depth_capture` (ingest), `plane_extraction` (geometry),
+  `pipeline` (schema + render), `server` (transport). The photo/video backend
+  slots in as a second ingest module producing the same point cloud.
 
 ## Build vs buy
 
-- LiDAR tier: a custom Open3D pipeline, not `RoomPlan`, since RoomPlan is
-  iOS-only and this project needs one pipeline covering both ARKit LiDAR and
-  ARCore depth-from-motion. RoomPlan's confirmed accuracy (1-3cm, from real
-  measurement studies, explicitly not sufficient for permit-grade drawings) is
-  still a useful reference target even though it is not being used directly.
-- Android capture: browser-based, WebXR Depth Sensing in Chrome, not a native
-  app. No install friction, no separate SDK integration to maintain.
-- Video and photo tiers: MUSt3R or `vggt-low-vram` as the reconstruction core
-  on the local 8GB card, a pretrained checkpoint, not a from-scratch model and
-  not a from-scratch SfM pipeline. MapAnything/MASt3R as a metric-scale
-  fallback to test, not the default, given the VRAM findings above. Custom
-  code sits around whichever backend for frame sampling, scale verification,
-  plane extraction, and schema conversion.
-- Plane segmentation and point cloud utilities: Open3D throughout, do not hand-roll.
-- Polygon extraction: start with RANSAC plane intersection in Open3D, PolyRoom
-  as a later upgrade if time allows and the hand-rolled version is producing
-  bad corners.
+- Depth tier: custom Open3D pipeline, not RoomPlan, because one pipeline has
+  to cover ARKit LiDAR and ARCore. RoomPlan's 1-3cm is the reference target.
+- Android capture: browser, WebXR, not a native app. Confirmed on device.
+- Photo and video tiers: `vggt-low-vram` first, MapAnything second, DA3 third
+  (only if xformers can be avoided). Never stock VGGT, MASt3R, AMB3R, or
+  SpatialLM on this card.
+- Scale anchor: MoGe-2, not Depth Pro.
+- Plane segmentation: Open3D throughout.
+- Polygon extraction: RANSAC intersection now, RoomFormer as the upgrade.
+- Backend: FastAPI + uvicorn, cloudflared quick tunnel. No database, the
+  capture directory is the record.
 
 ## Evaluation strategy
 
-- Ground truth: capture a real room with a tape measure, compare reconstructed wall
-  lengths and room area against the measured values.
-- Per-tier accuracy targets: LiDAR should land within a couple of cm given it has
-  direct metric depth; video and photo tiers depend entirely on how well scale gets
-  fixed and should be evaluated separately with that caveat stated.
-- Track failure rate, not just accuracy on captures that succeeded: report what
-  fraction of test captures produce no usable output at all.
-- Whichever scale path is used (DepthPro anchor by default, or MapAnything's
-  native metric claim if it gets tested), verify directly against a tape
-  measure rather than trusting a paper's general benchmark. This is the single
-  most important thing to check early.
+- Ground truth: tape measure a real room, compare wall lengths and area.
+- Per-tier accuracy targets: depth tier should land within a few cm on walls
+  the camera got close to. Video and photo depend on the scale path, report
+  them separately with that caveat.
+- Track failure rate, not just accuracy on captures that succeeded.
+- First thing to measure: full-buffer capture of the same furnished room,
+  does the polygon close now, and how far off is each wall.
 
 ## Risks and edge cases
 
-- Non-rectangular rooms, curved walls, sloped ceilings: plane-fitting assumptions
-  break down, needs explicit handling or explicit non-support.
-- Reflective or textureless surfaces (glass, blank drywall): classic feature
-  matching fails here, feed-forward models are more robust to this but not
-  immune, LiDAR depth can also be noisy or missing on glass.
-- Moving furniture or people during capture: violates the static-scene
-  assumption every one of these methods depends on, feed-forward models
-  included.
-- Static furniture occluding walls: confirmed on a real capture, not just
-  theoretical. A furnished room (bed, wardrobe, table between the camera and
-  a wall) reliably yields a confident plane for the wall(s) the camera had a
-  clear line of sight to, but only a weak, single-sided candidate for a wall
-  mostly blocked by furniture, never both sides of that direction. RANSAC on
-  raw geometry has no way to infer an occluded wall's position, it needs
-  enough real unoccluded points. wall_polygon correctly refuses to close a
-  polygon rather than guess when this happens, which is the right behavior,
-  but it means a naive plane-fitting pipeline will fail closure in any
-  realistically furnished room, not just adversarial edge cases. Real
-  production systems handle this with a trained prior (this is exactly why
-  RoomFormer/PolyRoom exist, noted earlier, rather than pure RANSAC), or by
-  requiring the capture to walk close enough to every wall to get a clear
-  view past furniture. Worth deciding explicitly which of these two paths to
-  take before assuming plane-fitting alone is sufficient.
-- GPU memory: the paper figures for VGGT (5.6GB at 20 views) do not hold up in
-  practice. Real user reports on the official repo show OOM on an 8GB RTX 4070
-  with 6 images, and even OOM on a 24GB RTX 4090 with 10 images, far past the
-  paper's claim. Do not trust paper VRAM numbers, test directly on the actual
-  card. Use `harry7557558/vggt-low-vram` (claims 150 images on 8GB) rather than
-  stock VGGT, or MUSt3R-224 (a real benchmark puts it at 4.1GB, more headroom
-  than VGGT's own figures). MASt3R has a confirmed disconfirming number,
-  11.8GB for 19 images on an RTX 3080, treat 8GB as a real no-go for it, not
-  just unverified. MapAnything's README gives no consumer VRAM number at all
-  (only a 2000-views-on-140GB figure), still fully unverified at 8GB, profile
-  it directly before relying on it (it ships
-  `scripts/profile_memory_runtime.py` for exactly this) rather than assuming
-  either way.
-- If 8GB genuinely cannot fit the target image count even with the low-VRAM
-  fork, fall back to a rented cloud GPU for that run, or reduce input
-  resolution and image count and accept a lower-confidence reconstruction.
+- Non-rectangular rooms, curved walls, sloped ceilings: plane fitting breaks,
+  needs explicit non-support.
+- Reflective or textureless surfaces: ARCore and feed-forward models both
+  degrade, LiDAR too on glass.
+- Moving furniture or people: violates the static scene assumption.
+- Static furniture occluding walls: confirmed real failure, see depth tier.
+- GPU memory: paper VRAM numbers do not hold. VGGT upstream OOMs an 8GB 4070
+  at 6 images. Only the low-VRAM fork has real 8GB numbers. Profile
+  MapAnything and DA3 directly before relying on them.
+- WSL2 on Blackwell: open Microsoft issues on hidden driver memory overhead
+  and unified-memory segfaults. If something looks like a phantom OOM, test
+  the same script on Windows-native Python before debugging the model.
+- Licenses: VGGT and MUSt3R weights are non-commercial. For a company
+  deliverable, MapAnything (Apache), DA3 Small/Base/Metric-L (Apache), MoGe
+  (MIT), RoomFormer (MIT) are the clean set.
+- ARCore depth accuracy is unverified at cm level. If it measures at 10cm+,
+  the honest framing is "walls from VIO poses plus close-range depth", not
+  "cm-accurate LiDAR-equivalent".
 
 ## Execution plan
 
-Building all three tiers for real is the target, not a fallback to "design
-only." A pretrained feed-forward model plus AI-assisted implementation makes
-this a day of integration work, not a multi-month research project.
-
-1. Common schema and plane/polygon extraction module first, since every tier
-   depends on it. Test against a synthetic point cloud (a cube) before touching
-   real data.
-2. LiDAR tier next: direct metric depth, fastest path to a working end-to-end
-   demo, and a correctness reference for the other two tiers.
-3. Photo and video tiers together, same backend: run `vggt-low-vram` or
-   MUSt3R-224 on the local 8GB card first, both have real evidence of fitting
-   (stock VGGT and MASt3R do not, do not use either directly at 8GB). Confirm
-   point cloud and pose output, then reuse the tier-3 plane/polygon extractor
-   on the result. Fall back to a rented cloud GPU only if the local card
-   cannot fit a usable image count even with these options, or if MapAnything
-   needs testing for its metric-scale claim.
-4. Add the DepthPro single-frame anchor and rescale, since neither
-   `vggt-low-vram` nor MUSt3R is metric out of the box. Verify the rescaled
-   result against the LiDAR/ARCore tier or a tape measure immediately, do not
-   assume any paper's numbers hold for this use case.
-5. A CLI or simple script wrapping the pipeline is enough; a UI is out of scope
-   unless explicitly asked for.
-6. If time remains: PolyRoom-based polygon extraction as an upgrade over the
-   RANSAC version, and a documented COLMAP fallback path for a no-GPU
-   environment.
+1. Done: schema, plane/polygon extraction with synthetic tests, depth
+   capture page, unprojection, pipeline, backend, tunnel script.
+2. Next: capture the furnished room again with the new page (full buffer,
+   photos, video). Check whether the polygon closes, measure each wall with a
+   tape, record the numbers in this doc.
+3. Photo and video tiers: install `vggt-low-vram`, run it on the photos from
+   step 2 in bf16 with SDPA, confirm memory on this card, fit the similarity
+   transform to the recorded poses, run the shared extractor.
+4. MoGe-2 anchor for captures without poses. Compare to the pose-based scale
+   on the same capture, that is the accuracy check for the anchor.
+5. Openings from wall-plane gaps. Then RoomFormer if closure keeps failing.
+6. COLMAP path documented, not built, for a no-GPU environment.
