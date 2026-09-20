@@ -20,28 +20,55 @@ pip install -r requirements.txt
 Requires Python 3.14. Torch is pulled in with CUDA 13 wheels (RTX 50 series
 needs cu128 or newer).
 
-## Run the capture flow
+## One command per capture
+
+```
+scripts/setup.sh                                   # once: deps, VGGT fork, weights (about 5 GB)
+uv run python scripts/floorplan.py <capture> <out>   # any tier, format detected from the folder
+```
+
+`<capture>` is one of:
+
+- a Stray Scanner export (`odometry.csv`, `depth/`, `confidence/`, `rgb.mp4`):
+  LiDAR tier from the depth frames, video tier from `rgb.mp4`, photo tier from
+  per-room stills cut from the walk, drift ablation, damage pass
+- an unpacked upload from the capture page (`capture.json` plus `photos/`,
+  `video.*`): depth tier from ARCore frames, then photo and video tiers
+- a files-only upload (`capture.json` with no depth frames, `photos/<room>/*.jpg`,
+  optional `video.*`): photo and video tiers, relative scale unless poses exist
+
+Outputs in `<out>`: `plan.json` (schema below), `plan.png`, `plan_photos.*`,
+`plan_video.*`, `plan_depth_drift_off.*` (ablation), `damage.json`, `summary.json`
+with timing. `scripts/benchmark.py` turns every output plus `data/ground_truth`
+into `docs/benchmark.md`.
+
+## Capture on a phone
 
 ```
 scripts/serve.sh
 ```
 
 Starts the backend on 127.0.0.1:8000 and a Cloudflare quick tunnel. Open the
-printed `https://....trycloudflare.com` URL in Chrome on an Android phone:
+printed `https://....trycloudflare.com` URL on the phone:
 
-1. start ar, walk the room, tap capture near each wall (saves depth + pose +
-   photo), tap record for a video with poses.
-2. stop, then upload + process. The floor plan renders in the overlay.
-3. or untick upload and export zip to download `capture.json`, `photos/`,
-   `video.webm` for offline processing.
+- Android Chrome: start ar, tap capture at each wall (depth + pose + photo),
+  record a walkthrough, upload + process. Results render in the overlay.
+- Any phone without WebXR (all iPhones): open "upload photos or a video
+  instead", pick the room's photos or a video, upload. For LiDAR on iPhone use
+  Stray Scanner and hand the export folder to the pipeline (docs/capture-protocol.md).
 
-Process a capture directory without the server:
+## Output schema (plan.json)
 
 ```
-uv run python -c "from floorplan_takehome.pipeline import process_capture_dir; process_capture_dir('data/captures/<id>')"
+rooms[]        id, polygon_cm, wall_lengths_cm (+_interval_cm), area_m2 (+_interval_m2),
+               wall_height_cm (+_interval_cm), height_source, openings[] (doorway/open/door/window,
+               width_cm, from_corner_cm, wall), source_tier
+adjacency[]    [room_a, room_b, opening_width_cm]
+damage         detector, regions[] (class, room, surface, width_cm, height_cm, area_m2,
+               height_above_floor_cm, photo, box), concealed_flags[] (rule, text), scope_items[]
+diagnostics    points, planes, walls, floor_y, ceiling_y, drift {estimate, ablation}, rooms
+interval_basis which error model produced the intervals (prior or calibrated)
 ```
-
-Writes `plan.json`, `plan.png`, `cloud.ply` next to `capture.json`.
 
 ## Layout
 

@@ -67,9 +67,16 @@ def reconstruct(cloud: o3d.geometry.PointCloud, source_tier: str, cameras: np.nd
     height_source = "floor_ceiling_planes" if wall_height is not None else None
     if wall_height is None and walls:
         # walls run floor to ceiling, so the vertical extent of their inliers is the room height
-        extents = [np.percentile(w.points[:, 1], 99) - np.percentile(w.points[:, 1], 1) for w in walls]
-        if np.median(extents) >= 2.0:  # anything lower means the ceiling was never observed
-            wall_height = float(np.median(extents))
+        tops = [np.percentile(w.points[:, 1], 99) for w in walls]
+        bottoms = [np.percentile(w.points[:, 1], 1) for w in walls]
+        top, bottom = float(np.median(tops)), float(np.median(bottoms))
+        all_y = np.asarray(cloud.points)[:, 1]
+        # the wall extent is the room height only if a ceiling layer sits at its top:
+        # a horizontal layer has far more points than a 20 cm wall band just below it
+        ceiling_layer = int(((all_y > top - 0.10) & (all_y < top + 0.10)).sum())
+        wall_band = int(((all_y > top - 0.60) & (all_y < top - 0.40)).sum())
+        if top - bottom >= 2.0 and ceiling_layer >= 1.5 * max(wall_band, 1):
+            wall_height = top - bottom
             height_source = "wall_extent"
         else:
             height_source = "ceiling_not_observed"
