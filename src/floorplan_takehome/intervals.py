@@ -12,7 +12,7 @@ from pathlib import Path
 # 95 percent half-widths. abs in cm, rel as a fraction of the value.
 PRIORS = {
     "lidar": {"length": (3.0, 0.01), "height": (3.0, 0.0), "opening": (5.0, 0.0), "area": (0.0, 0.02), "basis": "prior: ARKit LiDAR 1-3 cm published, RoomPlan studies"},
-    "depth": {"length": (10.0, 0.15), "height": (10.0, 0.05), "opening": (15.0, 0.0), "area": (0.0, 0.25), "basis": "prior widened by one tape check: -8 to -14 percent on walls"},
+    "depth": {"length": (8.0, 0.03), "height": (10.0, 0.05), "opening": (15.0, 0.0), "area": (0.0, 0.08), "basis": "prior set from one tape-checked room after the outer-face fix: walls within 2 percent, ceiling -11 cm"},
     "video": {"length": (10.0, 0.08), "height": (15.0, 0.05), "opening": (20.0, 0.0), "area": (0.0, 0.15), "basis": "prior, no ground truth yet"},
     "photos": {"length": (10.0, 0.10), "height": (15.0, 0.08), "opening": (25.0, 0.0), "area": (0.0, 0.20), "basis": "prior, no ground truth yet"},
 }
@@ -33,8 +33,8 @@ def _model(tier: str) -> dict:
 def interval(value: float | None, kind: str, tier: str, extra_cm: float = 0.0) -> list[float] | None:
     if value is None:
         return None
-    a, r = _model(tier)[kind]
-    half = a + r * abs(value) + extra_cm
+    abs_cm, rel = _model(tier)[kind]
+    half = abs_cm + rel * abs(value) + extra_cm
     return [round(value - half, 1), round(value + half, 1)]
 
 
@@ -49,10 +49,13 @@ def add_intervals(plan: dict, tier: str, info: dict | None = None) -> dict:
         room["wall_height_interval_cm"] = interval(room.get("wall_height_cm"), "height", tier, extra)
         area = room.get("area_m2")
         if area is not None:
-            a, r = _model(tier)["area"]
-            half = r * area + 2 * (extra / 100) * (area**0.5)
+            _, rel = _model(tier)["area"]
+            half = rel * area + 2 * (extra / 100) * (area**0.5)
             room["area_interval_m2"] = [round(area - half, 3), round(area + half, 3)]
         for o in room.get("openings", []):
             o["width_interval_cm"] = interval(o.get("width_cm"), "opening", tier, extra)
+    for reg in (plan.get("damage") or {}).get("regions", []) if isinstance(plan.get("damage"), dict) else []:
+        reg["width_interval_cm"] = interval(reg.get("width_cm"), "opening", tier, extra)
+        reg["height_interval_cm"] = interval(reg.get("height_cm"), "opening", tier, extra)
     plan["interval_basis"] = _model(tier)["basis"]
     return plan

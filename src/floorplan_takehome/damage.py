@@ -113,7 +113,8 @@ def verify_with_vlm(results: dict[str, list[dict]], margin: float = 0.2) -> dict
 
     if not any(results.values()):
         return results
-    model = Qwen3VLForConditionalGeneration.from_pretrained(VLM_ID, dtype=torch.bfloat16, device_map="cuda", attn_implementation="sdpa").eval()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = Qwen3VLForConditionalGeneration.from_pretrained(VLM_ID, dtype=torch.bfloat16 if device == "cuda" else torch.float32, device_map=device, attn_implementation="sdpa").eval()
     processor = AutoProcessor.from_pretrained(VLM_ID)
     for path, found in results.items():
         image = Image.open(path).convert("RGB")
@@ -127,7 +128,7 @@ def verify_with_vlm(results: dict[str, list[dict]], margin: float = 0.2) -> dict
                 continue
             crop.thumbnail((896, 896))
             messages = [{"role": "user", "content": [{"type": "image", "image": crop}, {"type": "text", "text": VLM_PROMPT}]}]
-            inputs = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt").to("cuda")
+            inputs = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt").to(device)
             with torch.no_grad():
                 out = model.generate(**inputs, max_new_tokens=6, do_sample=False)
             answer = processor.batch_decode(out[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0].strip().lower()
@@ -139,7 +140,8 @@ def verify_with_vlm(results: dict[str, list[dict]], margin: float = 0.2) -> dict
                 kept.append(f)
         results[path] = kept
     del model
-    torch.cuda.empty_cache()
+    if device == "cuda":
+        torch.cuda.empty_cache()
     return results
 
 
@@ -365,7 +367,7 @@ def scope_items(rooms: list[dict], regions: list[dict]) -> list[dict]:
     return items
 
 
-MIN_SCORE = {"owlv2": 0.25, "claude": 0.5}  # owlv2 candidates are gated by the VLM, not the score
+MIN_SCORE = {"owlv2": 0.0, "claude": 0.5}  # owlv2 candidates are gated by the VLM verdict, not by score
 MIN_SIDE_CM = 8.0  # anything smaller is a speck or a shadow edge, not a damage region
 
 

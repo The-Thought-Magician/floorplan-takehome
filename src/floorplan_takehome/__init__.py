@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from floorplan-takehome!")
+"""Dimensioned floor plans from phone captures."""

@@ -42,8 +42,8 @@ def load_intrinsics(scan: Path) -> np.ndarray:
 
 
 def load_odometry(scan: Path) -> dict[str, np.ndarray]:
-    scan = Path(scan)
     """frame id -> 4x4 camera-to-world matrix."""
+    scan = Path(scan)
     poses = {}
     with open(scan / "odometry.csv") as f:
         reader = csv.reader(f)
@@ -66,7 +66,7 @@ def frame_to_points(depth_png: Path, conf_png: Path | None, intrinsics: np.ndarr
                     min_confidence: int = 2, pixel_stride: int = 2, max_range_m: float = 6.0) -> np.ndarray:
     """Unproject one depth frame into camera coordinates (n, 3)."""
     depth = cv2.imread(str(depth_png), cv2.IMREAD_UNCHANGED)
-    if depth is None:
+    if depth is None or depth.ndim != 2 or intrinsics[0, 2] <= 0:
         return np.empty((0, 3))
     h, w = depth.shape
     valid = depth > 0
@@ -112,21 +112,17 @@ def window_clouds(scan: Path, window: int = 300, stride: int = 6, min_confidence
     return out, poses
 
 
-def load_point_cloud(scan: Path, max_frames: int | None = None, min_confidence: int = 2,
-                     pixel_stride: int = 1, voxel_m: float = 0.02, chunk: int = 150,
-                     poses: dict[str, np.ndarray] | None = None) -> tuple[o3d.geometry.PointCloud, np.ndarray]:
-    """Fuse depth frames into one world-frame cloud. Returns (cloud, camera positions).
+def load_point_cloud(scan: Path, min_confidence: int = 2, pixel_stride: int = 1, voxel_m: float = 0.02,
+                     chunk: int = 150, poses: dict[str, np.ndarray] | None = None) -> tuple[o3d.geometry.PointCloud, np.ndarray]:
+    """Fuse every depth frame into one world-frame cloud. Returns (cloud, camera positions).
 
-    Every frame is used unless max_frames caps it. Frames are voxel-downsampled per
-    frame and the running cloud is downsampled every `chunk` frames to bound memory.
-    poses overrides the odometry (drift-corrected poses).
+    Frames are voxel-downsampled per frame and the running cloud is downsampled every
+    `chunk` frames to bound memory. poses overrides the odometry (drift-corrected poses).
     """
     scan = Path(scan)
     intrinsics = load_intrinsics(scan)
     poses = poses if poses is not None else load_odometry(scan)
     frames = sorted(p.stem for p in (scan / "depth").glob("*.png") if p.stem in poses)
-    if max_frames:
-        frames = frames[:: max(1, len(frames) // max_frames)]
 
     merged = o3d.geometry.PointCloud()
     pending = o3d.geometry.PointCloud()
@@ -191,7 +187,7 @@ def rotate_pose_cv(m: np.ndarray, deg: int) -> np.ndarray:
     return out
 
 
-def video_frames_with_poses(scan: Path, out_dir: Path, every: int = 60, upright: bool = True) -> tuple[list[str], dict[int, np.ndarray]]:
+def video_frames_with_poses(scan: Path, out_dir: Path, every: int = 60) -> tuple[list[str], dict[int, np.ndarray]]:
     """Extract every Nth frame of rgb.mp4 (frame i of the video is odometry frame i).
 
     Frames are rotated upright (portrait capture) and the poses adjusted to match, so a
@@ -202,7 +198,7 @@ def video_frames_with_poses(scan: Path, out_dir: Path, every: int = 60, upright:
     scan, out_dir = Path(scan), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     poses_cv = load_odometry(scan)
-    deg = upright_rotation(poses_cv) if upright else 0
+    deg = upright_rotation(poses_cv)
     marker = out_dir / f"rotation_{deg}.txt"
     if not marker.exists():
         for old in out_dir.glob("*.jpg"):

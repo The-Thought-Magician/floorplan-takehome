@@ -1,5 +1,6 @@
 import numpy as np
 import open3d as o3d
+import pytest
 
 from floorplan_takehome.plane_extraction import (
     Plane,
@@ -50,16 +51,8 @@ def test_wall_polygon_recovers_rectangle_dimensions():
     corners = wall_polygon(walls)
 
     assert len(corners) == 4
-    assert polygon_area(corners) == pytest_approx(12.0)
-    assert polygon_perimeter(corners) == pytest_approx(14.0)
-
-
-def pytest_approx(value, tol=0.05):
-    class _Approx:
-        def __eq__(self, other):
-            return abs(other - value) < tol
-
-    return _Approx()
+    assert polygon_area(corners) == pytest.approx(12.0, abs=0.05)
+    assert polygon_perimeter(corners) == pytest.approx(14.0, abs=0.05)
 
 
 def test_merge_walls_collapses_noisy_duplicate_of_same_wall():
@@ -82,10 +75,9 @@ def test_merge_walls_collapses_noisy_duplicate_of_same_wall():
 
 
 def _refit_normal(points):
-    centroid = points.mean(axis=0)
-    _, _, vt = np.linalg.svd(points - centroid, full_matrices=False)
-    normal = vt[-1]
-    return normal if normal[1] >= 0 else -normal
+    from floorplan_takehome.plane_extraction import _refit
+
+    return _refit(points).normal
 
 
 def test_wall_polygon_rejects_near_parallel_walls_instead_of_garbage():

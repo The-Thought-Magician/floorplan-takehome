@@ -76,7 +76,7 @@ interval_basis which error model produced the intervals (prior or calibrated)
 src/floorplan_takehome/   depth_capture (ingest), plane_extraction (geometry),
                           pipeline (schema + render), server (FastAPI)
 web-capture/              WebXR capture page, served at / by the backend
-scripts/                  serve.sh (backend + tunnel), inspect_capture.py
+scripts/                  floorplan.py (one command), serve.sh (backend + tunnel), setup.sh, fetch_weights.sh, benchmark.py
 tests/                    synthetic-data tests
 docs/                     plan and design notes
 data/                     captures (not tracked in git)

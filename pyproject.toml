@@ -26,8 +26,6 @@ dependencies = [
     "uvicorn[standard]>=0.53.0",
 ]
 
-[project.scripts]
-floorplan-takehome = "floorplan_takehome:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]

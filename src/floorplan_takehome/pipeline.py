@@ -440,14 +440,17 @@ def run_damage_for_capture(capture_dir: Path, plan: dict, backend: str | None = 
     return result
 
 
-def run_damage_for_stray(scan_dir: Path, out_dir: Path, plan: dict, every: int = 60, backend: str | None = None) -> dict | None:
+def run_damage_for_stray(scan_dir: Path, out_dir: Path, plan: dict, backend: str | None = None) -> dict | None:
     """Damage regions on upright video frames of a Stray Scanner scan (poses per frame)."""
     from floorplan_takehome import stray_scanner as ss
     from floorplan_takehome.damage import run_damage
     from floorplan_takehome.multiview import horizontal_frames
 
     scan_dir, out_dir = Path(scan_dir), Path(out_dir)
-    paths, known = ss.video_frames_with_poses(scan_dir, out_dir / "frames_damage", every=every)
+    # the video tier already extracted frames at 2 per second; damage uses every other one
+    paths, known = ss.video_frames_with_poses(scan_dir, out_dir / "frames", every=30)
+    paths = paths[::2]
+    known = {k: known[i] for k, i in enumerate(range(0, len(known), 2)) if i in known}
     keep = horizontal_frames(known)
     if not keep:
         return None

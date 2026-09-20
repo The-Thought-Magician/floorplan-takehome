@@ -16,24 +16,6 @@ import open3d as o3d
 os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")  # no Python headers here, see plan.md
 
 
-def umeyama(src: np.ndarray, dst: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
-    """Similarity transform (scale, rotation, translation) with dst ~ s * R @ src + t."""
-    if len(src) < 3:
-        raise ValueError("need at least 3 point pairs for a similarity transform")
-    mu_s, mu_d = src.mean(axis=0), dst.mean(axis=0)
-    src_c, dst_c = src - mu_s, dst - mu_d
-    cov = dst_c.T @ src_c / len(src)
-    u, sing, vt = np.linalg.svd(cov)
-    sign = np.eye(3)
-    if np.linalg.det(u) * np.linalg.det(vt) < 0:
-        sign[2, 2] = -1
-    rotation = u @ sign @ vt
-    var_src = (src_c**2).sum() / len(src)
-    scale = float((sing * np.diag(sign)).sum() / var_src)
-    translation = mu_d - scale * rotation @ mu_s
-    return scale, rotation, translation
-
-
 # WebXR/ARCore cameras look down -z with y up, OpenCV cameras look down +z with y down.
 _GL_TO_CV = np.diag([1.0, -1.0, -1.0])
 
@@ -99,6 +81,30 @@ def camera_centers_from_extrinsics(extrinsic: np.ndarray) -> np.ndarray:
     return -np.einsum("sij,si->sj", rot, trans)
 
 
+_VGGT = None
+
+
+def load_vggt():
+    """The 1B model, loaded once per process (5 GB, several seconds from disk)."""
+    global _VGGT
+    if _VGGT is None:
+        import torch
+        from vggt.models.vggt import VGGT
+
+        torch.backends.cuda.enable_cudnn_sdp(False)  # Blackwell, see plan.md
+        _VGGT = VGGT.from_pretrained("facebook/VGGT-1B").to("cuda").to(torch.bfloat16).eval()
+    return _VGGT
+
+
+def release_vggt():
+    global _VGGT
+    if _VGGT is not None:
+        import torch
+
+        _VGGT = None
+        torch.cuda.empty_cache()
+
+
 def run_vggt(image_paths: list[str], cache: Path | None = None) -> dict:
     """Run VGGT once over all images. Returns world points, confidence, extrinsics.
 
@@ -110,14 +116,12 @@ def run_vggt(image_paths: list[str], cache: Path | None = None) -> dict:
         if list(data["paths"]) == list(image_paths):
             return {k: data[k] for k in ("points", "conf", "extrinsic", "intrinsic")} | {"peak_vram_gb": float(data["peak_vram_gb"])}
     import torch
-    from vggt.models.vggt import VGGT
     from vggt.utils.load_fn import load_and_preprocess_images
     from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 
-    torch.backends.cuda.enable_cudnn_sdp(False)  # Blackwell, see plan.md
     dtype = torch.bfloat16
     device = "cuda"
-    model = VGGT.from_pretrained("facebook/VGGT-1B").to(device).to(dtype).eval()
+    model = load_vggt()
     images = load_and_preprocess_images(image_paths, mode="pad").to(device).to(dtype)  # keep floor and ceiling of portrait frames
 
     with torch.no_grad():
@@ -131,7 +135,7 @@ def run_vggt(image_paths: list[str], cache: Path | None = None) -> dict:
         "intrinsic": intrinsic[0].float().cpu().numpy(),
         "peak_vram_gb": round(torch.cuda.max_memory_allocated() / 1e9, 2),
     }
-    del model, images, predictions
+    del images, predictions
     torch.cuda.empty_cache()
     if cache:
         Path(cache).parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +156,7 @@ def reconstruct_images(
     that world frame.
     """
     out = run_vggt(image_paths, cache)
+    release_vggt()
     centers = camera_centers_from_extrinsics(out["extrinsic"])
     keep = out["conf"] >= np.percentile(out["conf"], conf_percentile)
     points = out["points"][keep]
@@ -318,6 +323,7 @@ def reconstruct_video_chunked(
         clouds.append(pts.astype(np.float64))
         centers.append(apply_similarity(camera_centers_from_extrinsics(out["extrinsic"]), scale, rotation, translation))
         fits.append(fit)
+    release_vggt()
     if not clouds:
         raise ValueError("no chunk could be reconstructed")
     cloud = o3d.geometry.PointCloud()
@@ -380,6 +386,7 @@ def reconstruct_photo_folders(folders: dict[str, tuple[list[str], dict[int, np.n
             per_room[room_id] = {"images": len(paths), "scale": None}
         clouds.append(pts.astype(np.float64))
         centers.append(cams)
+    release_vggt()
     if not clouds:
         raise ValueError("no room had enough photos")
     cloud = o3d.geometry.PointCloud()

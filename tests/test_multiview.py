@@ -1,19 +1,6 @@
 import numpy as np
 
-from floorplan_takehome.multiview import apply_similarity, camera_centers_from_extrinsics, umeyama
-
-
-def test_umeyama_recovers_scale_rotation_translation():
-    rng = np.random.default_rng(1)
-    src = rng.normal(size=(8, 3))
-    angle = 0.7
-    rot = np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]])
-    dst = 2.5 * src @ rot.T + np.array([1.0, -2.0, 0.5])
-
-    scale, r, t = umeyama(src, dst)
-    assert abs(scale - 2.5) < 1e-9
-    np.testing.assert_allclose(r, rot, atol=1e-9)
-    np.testing.assert_allclose(apply_similarity(src, scale, r, t), dst, atol=1e-9)
+from floorplan_takehome.multiview import camera_centers_from_extrinsics
 
 
 def test_camera_centers_invert_opencv_extrinsics():
