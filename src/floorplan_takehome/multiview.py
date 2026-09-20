@@ -118,7 +118,7 @@ def run_vggt(image_paths: list[str], cache: Path | None = None) -> dict:
     dtype = torch.bfloat16
     device = "cuda"
     model = VGGT.from_pretrained("facebook/VGGT-1B").to(device).to(dtype).eval()
-    images = load_and_preprocess_images(image_paths).to(device).to(dtype)
+    images = load_and_preprocess_images(image_paths, mode="pad").to(device).to(dtype)  # keep floor and ceiling of portrait frames
 
     with torch.no_grad():
         predictions = model(images)
@@ -225,9 +225,17 @@ def depth_scale_check(capture_dir: Path, image_paths: list[str], cache: Path, co
         if not record or not record["views"][0].get("depth_buffer"):
             continue
         ph_w, ph_h = record["photo_size"]
-        full_h = round(ph_h * w / ph_w / 14) * 14
-        y0 = (full_h - h) // 2
-        arcore = _depth_in_view_coords(record["views"][0], w, full_h)[y0 : y0 + h]
+        # pad mode: the long side becomes 518, the short side is scaled and centred with padding
+        if ph_h >= ph_w:
+            img_w = round(ph_w * h / ph_h / 14) * 14
+            x0 = (w - img_w) // 2
+            arcore = np.full((h, w), np.nan)
+            arcore[:, x0 : x0 + img_w] = _depth_in_view_coords(record["views"][0], img_w, h)
+        else:
+            img_h = round(ph_h * w / ph_w / 14) * 14
+            y0 = (h - img_h) // 2
+            arcore = np.full((h, w), np.nan)
+            arcore[y0 : y0 + img_h, :] = _depth_in_view_coords(record["views"][0], w, img_h)
         rot, t = ext[i, :, :3], ext[i, :, 3]
         vggt = (pts[i].reshape(-1, 3) @ rot.T + t)[:, 2].reshape(h, w)
         good = np.isfinite(arcore) & (arcore > 0.3) & (arcore < 5) & (vggt > 1e-3) & (conf[i] >= np.percentile(conf[i], conf_percentile))

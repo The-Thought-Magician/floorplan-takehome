@@ -1,9 +1,12 @@
 {
   "room": "bedroom",
-  "captures": ["20260920-035737-0c6f2b"],
+  "captures": [
+    "20260920-035737-0c6f2b"
+  ],
   "measured_with": "tape",
   "measured_on": "2026-09-20",
   "length_cm": 426.7,
   "width_cm": 365.8,
-  "note": "14 ft by 12 ft wall to wall, ceiling height not measured yet"
+  "note": "14 ft by 12 ft wall to wall, ceiling 10 ft 3 in, all tape measured",
+  "ceiling_height_cm": 312.4
 }
