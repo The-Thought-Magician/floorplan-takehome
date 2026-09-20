@@ -1,6 +1,6 @@
 # Technical report: dimensioned floor plans from phone captures
 
-Draft, numbers marked TBD are filled by scripts/benchmark.py output before submission.
+Draft. Every number below is from docs/benchmark.md or docs/fix-loop.md, regenerable with scripts/benchmark.py and scripts/floorplan.py.
 
 ## 1. Architecture
 
@@ -40,14 +40,16 @@ Honest accuracy per tier, measured so far (see docs/benchmark.md):
 
 | tier | walls | ceiling | basis |
 |---|---|---|---|
-| LiDAR | TBD | TBD | 3 Cozmo sample scans, no tape yet |
-| depth (Android, TECNO LI9) | -8 to -14 percent | -11 cm | one tape-measured bedroom |
-| video | -3 to -15 percent | -42 cm | same bedroom, ARCore-depth anchor |
-| photos | -7 to -9 percent | -70 cm | same bedroom, ARCore-depth anchor |
+| LiDAR | not measured (no tape on the sample flats), bands 3 to 8 cm thick | 294 and 308 cm found per room where the ceiling was scanned | 3 Cozmo sample scans |
+| depth (Android, TECNO LI9) | -1.3 and +1.8 percent after the fix loop (-8 and -14 before) | -11 cm | one tape-measured bedroom |
+| video | -3 to -15 percent | not found | same bedroom, ARCore-depth anchor |
+| photos, with poses | -7 to -9 percent | not found | same bedroom, ARCore-depth anchor |
+| photos, no poses | -12 and -14 percent | not found | same bedroom, MoGe-2 anchor, no EXIF |
 
-No tier passes the 1.5 cm ceiling gate yet. The LiDAR tier is the only one with
-a credible path to the wall gates; the two view-model tiers are limited by scale
-recovery, not by geometry (their aspect ratios are within 2 percent of the tape).
+No tier passes the 1.5 cm ceiling gate or the 1 percent wall gate. The depth
+tier is within 2 percent after the fix loop on the one tape-measured room. The
+view-model tiers are limited by scale recovery, not geometry: their aspect
+ratios are within 2 percent of the tape.
 
 ## 3. Drift handling
 
@@ -85,12 +87,32 @@ Where the centimetres go, largest first:
 ## 5. Calibration analysis
 
 Intervals come from a per-tier error model (absolute floor plus relative term
-plus alignment term), stated as priors until data/calibration.json refits them
-from data/ground_truth. Coverage is scored by scripts/benchmark.py: TBD.
+plus alignment term for view models), stated as priors and named in every
+plan.json as `interval_basis`. One tape-measured room is not enough to fit
+them; the depth-tier prior was reset after the fix loop to the residual it
+showed there (walls within 2 percent, ceiling -11 cm). Every other tier's
+interval is a prior and the report says so.
 
 ## 6. Fix loop
 
-See docs/fix-loop.md. Worst gate: TBD after the benchmark capture.
+docs/fix-loop.md. Worst gate: depth-tier wall lengths, -7.9 and -14.2 percent.
+Root cause: depth-from-motion fills textureless walls with points biased into
+the room, so the fitted wall line sits inside the true wall. Fix: for wall
+bands thicker than 15 cm, place the wall at the 80th percentile of the band's
+outward spread. Predicted within 3 percent; measured -1.3 and +1.8 percent.
+LiDAR bands are thin, so LiDAR rooms did not move. The percentile was set on
+the same capture it was tested on, and no second closed capture exists yet to
+check it, which the fix-loop page states.
+
+## 6a. Damage detection
+
+OWLv2 localizes candidates, Qwen3-VL-2B classifies each crop or rejects it.
+Cozmo's single_room sample contains a real 60 cm crack in a bathroom wall: the
+first stage found it and called it a water stain, the second stage relabels it
+crack. On the undamaged bedroom every candidate is rejected. Concealed-damage
+flags are rules named in the output. Metric extent comes from the box cast
+onto the room surface at the depth of the hit, or from the depth frame when
+one exists for the photo.
 
 ## 7. Known failure modes
 

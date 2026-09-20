@@ -49,7 +49,7 @@ requirement coverage in docs/compliance.md, protocol in docs/capture-protocol.md
 - Tape ground truth so far: bedroom 426.7 x 365.8 cm, ceiling 312.4 cm
   (data/ground_truth/bedroom.json). Staged damage planned: wet patch + taped crack.
 
-## Progress (2026-09-20, 37 commits)
+## Progress (2026-09-20, 55 commits)
 
 Done and committed:
 
@@ -59,22 +59,32 @@ Done and committed:
   polygons, adjacency, doors and windows from wall gaps, per-room heights.
 - Photo and video tiers: VGGT-1B via vggt-low-vram, upright frames from gravity,
   chunked video aligned per chunk to poses, per-room stills reconstructed room by
-  room. Scale from poses (walking capture) or ARCore depth (rotate-in-place).
-- Contract: intervals on every measurement (priors, not calibrated), damage
-  regions with metric extent (OWLv2 local, Claude optional), concealed-damage
-  rules, scope items, drift accountability with ablation.
+  room. Scale from poses (walking capture), ARCore depth (rotate-in-place), or
+  MoGe-2 when no poses exist (levelled from camera up axes, FOV from EXIF).
+- Contract: intervals on every measurement (priors), damage regions with metric
+  extent (OWLv2 candidates classified by Qwen3-VL-2B, Claude optional and off),
+  concealed-damage rules, scope items, drift accountability with ablation.
+- Fix loop shipped: outer wall face for thick depth bands, bedroom walls from
+  -8/-14 percent to -1.3/+1.8 percent, LiDAR unchanged. docs/fix-loop.md.
+- Review pass with the repo skills applied: capture id validation, zip checks
+  before extraction, depth tier through the multi-room path, VGGT loaded once,
+  dead code removed.
 - Ops: FastAPI backend, one-command CLI (scripts/floorplan.py), setup and weight
   scripts, benchmark report generator, compliance matrix, protocol, report draft.
 
-Measured: bedroom depth tier 393 x 314 cm vs 427 x 366 (-8, -14 percent),
-ceiling 302 vs 312. Photo tier -7 to -9 percent, video -3 to -15 percent. No gate
-passed yet. LiDAR tier on the samples segments 3, 6 and 5 rooms; image tiers on
-the samples reach 10 to 15 degree orientation residuals against the poses.
+Measured: bedroom depth tier 421 x 372 cm vs 427 x 366 after the fix, ceiling
+302 vs 312 (wall extent, ceiling never seen). Poseless photo tier 378 x 316.
+No gate passed. LiDAR tier on the samples segments 3, 6 and 5 rooms.
 
-Pending: user benchmark capture (3 rooms, damage, repeat), magicplan head-to-head,
-fix loop declaration and shipped fix, technical report numbers, calibration from
-ground truth, MoGe-2 metric anchor for poseless photos and video, clean-machine
-test of scripts/setup.sh.
+Environment gotchas: TORCH_COMPILE_DISABLE=1 and TORCH_DISABLE_NATIVE_JIT=1 are
+set in the package __init__ (no Python headers, Triton JIT fails); torch must be
+imported after the package. HF_HUB_DISABLE_XET=1 for downloads.
+
+Pending and blocked on the user: no more rooms, no staged damage, no magicplan,
+no API key (user's decision on 2026-09-20). Repeatability uses the two bedroom
+captures, the second of which does not close. Still to do without user input:
+technical report final pass, clean-machine setup test, calibration once a second
+tape-measured room exists.
 
 ## Writing rules
 
