@@ -10,8 +10,8 @@ the benchmark capture), not attempted.
 |---|---|---|---|
 | Capture route (Route 2, stock apps), one-page protocol | docs/capture-protocol.md | the page | done |
 | Device matrix | docs/report.md (tier design) | table | pending report |
-| Photo tier: 2-8 stills per room, no depth, no poses, stitched plan | src/floorplan_takehome/multiview.py (`reconstruct_photo_folders`), pipeline.py | data/sample/*/plan_photos.json | partial: stitching needs poses today, files-only uploads are relative scale |
-| Video tier: handheld clip | multiview.py (`reconstruct_video_chunked`) | data/sample/*/plan_video.json | partial: metric via recorded poses only |
+| Photo tier: 2-8 stills per room, no depth, no poses, stitched plan | src/floorplan_takehome/multiview.py (`reconstruct_photo_folders`, `moge_scale`), pipeline.py | data/sample/*/plan_photos.json | partial: metric via MoGe-2 without poses, whole-property stitch without poses not built |
+| Video tier: handheld clip | multiview.py (`reconstruct_video_chunked`, `moge_scale`) | data/sample/*/plan_video.json | partial: metric via poses or MoGe-2, chunk chaining without poses not built |
 | LiDAR tier: depth, poses, intrinsics | stray_scanner.py, depth_capture.py | data/sample/*/plan.json | done on Stray Scanner and ARCore |
 
 ## Part 2: output contract

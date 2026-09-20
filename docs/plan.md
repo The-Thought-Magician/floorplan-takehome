@@ -317,6 +317,41 @@ windows. A room scanned only from its doorway gets the scanned footprint, not
 the room. Doorway widths from region contact overshoot when the shared wall
 was not scanned.
 
+## Scale without poses: MoGe-2 anchor (2026-09-20)
+
+iPhone photos and Camera-app video carry no poses, so the walk-in test's photo
+and video tiers need a monocular metric anchor. Measured on the bedroom photos
+against the tape-implied VGGT scale of 2.30:
+
+| anchor | scale | error |
+|---|---|---|
+| camera poses (rotate-in-place) | 1.38 | -40 percent |
+| ARCore depth per pixel | 2.49 | +8 percent |
+| MoGe-2 ViT-L, FOV estimated by the model | 1.88 (per frame 1.48 to 2.24) | -18 percent |
+| MoGe-2 ViT-L, FOV from the projection matrix | 2.05 (per frame 1.69 to 2.33) | -11 percent |
+| MoGe-2 with FOV, far half of the frames only | 2.30 | within 2 percent |
+
+Frames that see a whole wall at 2 to 3 m agree with the tape; close-ups of
+furniture at 1 to 1.5 m come out low, most likely because VGGT's per-frame
+depth is inconsistent on a rotate-in-place capture rather than because MoGe is.
+Implemented: FOV from EXIF (35mm-equivalent focal length) when present, per-frame
+ratio of MoGe to VGGT depth on confident pixels, anchor = median over the farther
+half of the frames, both aggregates recorded. Poseless clouds are levelled from
+the mean camera up axis (phones are held upright). MoGe-2 is MIT with commercial
+weights, 1.3 GB VRAM, 0.3 s per frame after loading.
+
+## Damage detection findings (2026-09-20)
+
+- OWLv2 (local, Apache 2.0) localizes damage but confuses classes. Cozmo's
+  single_room sample has a real 60 cm crack in the bathroom wall: found at the
+  right place, labelled water stain at 0.55 even after re-scoring the crop
+  across all class prompts. On the undamaged bedroom it produced three low-score
+  false positives, rejected by the score and size rule (0.40, 8 cm).
+- Claude vision is wired as the second backend and is the intended detector when
+  an API key exists on the run machine; it is not tested yet for lack of a key.
+- Damage acceptance and rejects are both written to damage.json so the report
+  can show precision honestly once the staged-damage room is captured.
+
 ## Scale strategy summary
 
 | tier | scale source |
@@ -324,8 +359,8 @@ was not scanned.
 | depth (ARKit LiDAR) | ARKit metric depth, exact |
 | depth (Android ARCore) | ARCore VIO-fused metric depth, accuracy unverified |
 | video via our capture page | ARCore VIO poses recorded alongside the video |
-| video from elsewhere | VGGT relative output, MoGe-2 anchor or MapAnything |
-| photos | VGGT relative output, MoGe-2 anchor or MapAnything |
+| video from elsewhere | VGGT relative output, MoGe-2 anchor (implemented) |
+| photos | VGGT relative output, MoGe-2 anchor (implemented), poses when recorded |
 
 ## Architecture
 
