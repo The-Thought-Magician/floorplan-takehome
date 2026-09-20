@@ -1,13 +1,19 @@
 {
   "room": "bedroom",
   "captures": [
+    "20260920-034122-7a3481",
+    "20260920-034124-b5f6ae",
+    "20260920-034127-7b514f",
     "20260920-035737-0c6f2b",
-    "bedroom-files-only"
+    "bedroom-files-only",
+    "legacy-depth-capture-1789827069668",
+    "legacy-depth-capture-1789828072980",
+    "legacy-depth-capture-main-cluster"
   ],
   "measured_with": "tape",
   "measured_on": "2026-09-20",
   "length_cm": 426.7,
   "width_cm": 365.8,
-  "note": "14 ft by 12 ft wall to wall, ceiling 10 ft 3 in, all tape measured",
+  "note": "14 ft by 12 ft wall to wall, ceiling 10 ft 3 in, all tape measured. Every capture listed is this room: three sessions on 2026-09-19 (coarse 20x15 depth grid page), three identical uploads of one 15-frame session and one 145-frame session on 2026-09-20.",
   "ceiling_height_cm": 312.4
 }

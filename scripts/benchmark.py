@@ -95,7 +95,8 @@ def main(out_path: Path) -> None:
                     row["walls"] = wall_errors(room, gt)
                     if height is not None and gt.get("ceiling_height_cm"):
                         row["height_err_cm"] = height - gt["ceiling_height_cm"]
-                    repeat.setdefault((gt["room"], tier), []).append((cdir.name, room.get("wall_lengths_cm"), height))
+                if gt:
+                    repeat.setdefault((gt["room"], tier), []).append((cdir.name, room.get("wall_lengths_cm") if room else None, height))
                 rows.append(row)
 
     lines += ["## Per capture, per tier", "", "| capture | tier | rooms | closed | wall errors (measured / truth cm, pct) | height cm (err) | wall gate | height gate |", "|---|---|---|---|---|---|---|---|"]
@@ -118,11 +119,20 @@ def main(out_path: Path) -> None:
         lines.append("| capture | wall lengths cm | height cm |")
         lines.append("|---|---|---|")
         for cid, walls, h in caps:
-            lines.append(f"| {cid} | {walls} | {h} |")
+            lines.append(f"| {cid} | {walls if walls else 'no closed polygon'} | {h if h is not None else 'none'} |")
+        closed = [(c, sorted(w)) for c, w, _ in caps if w]
+        lines.append("")
+        if len(closed) >= 2:
+            a, b = closed[0][1], closed[-1][1]
+            n = min(len(a), len(b))
+            diffs = [abs(x - y) / max(y, 1) * 100 for x, y in zip(a[:n], b[:n])]
+            worst = max(diffs)
+            lines.append(f"Wall agreement between {closed[0][0]} and {closed[-1][0]}: worst {worst:.1f} percent, gate 0.5 percent or 1 cm: {'PASS' if worst <= 0.5 else 'FAIL'}")
+        else:
+            lines.append(f"{len(caps)} captures, {len(closed)} closed a polygon: repeatability cannot be scored, the capture that fails to close is the finding.")
         hs = [h for _, _, h in caps if h is not None]
         if len(hs) >= 2:
             spread = max(hs) - min(hs)
-            lines.append("")
             lines.append(f"Height spread {spread:.1f} cm, gate 1.0 cm: {'PASS' if spread <= 1.0 else 'FAIL'}")
         lines.append("")
     if not any_rep:
