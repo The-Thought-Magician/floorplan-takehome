@@ -284,14 +284,27 @@ def scope_items(rooms: list[dict], regions: list[dict]) -> list[dict]:
     return items
 
 
+MIN_SCORE = {"owlv2": 0.32, "claude": 0.5}
+MIN_SIDE_CM = 8.0  # anything smaller is a speck or a shadow edge, not a damage region
+
+
 def run_damage(image_paths: list[str], photo_poses, rooms, floor_y, ceiling_y, depth_lookup=None, backend: str | None = None) -> dict:
     backend = backend or detector_backend()
     detections = detect_claude(image_paths) if backend == "claude" else detect_owlv2(image_paths)
-    regions = localize(detections, photo_poses, rooms, floor_y, ceiling_y, depth_lookup)
+    all_regions = localize(detections, photo_poses, rooms, floor_y, ceiling_y, depth_lookup)
+    regions, rejected = [], []
+    for r in all_regions:
+        reasons = []
+        if (r.get("score") or 0) < MIN_SCORE.get(backend, 0.3):
+            reasons.append("low score")
+        if min(r["width_cm"], r["height_cm"]) < MIN_SIDE_CM:
+            reasons.append("too small")
+        (rejected if reasons else regions).append({**r, "rejected": reasons} if reasons else r)
     return {
         "detector": {"backend": backend, "model": "claude-opus-5" if backend == "claude" else "google/owlv2-base-patch16-ensemble"},
         "raw_detections": {Path(k).name: v for k, v in detections.items()},
         "regions": regions,
+        "rejected": rejected,
         "concealed_flags": flag_concealed(regions, rooms),
         "scope_items": scope_items(rooms, regions),
     }
