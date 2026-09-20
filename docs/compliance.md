@@ -38,7 +38,7 @@ the benchmark capture), not attempted.
 | Multi-room capture, 3+ rooms plus connector | data/sample/single_scan_with_ceiling (Cozmo sample), user capture pending | plan.json | partial: sample has no ground truth |
 | Furnished room with staged damage in two classes | not stageable in the available room; Cozmo's single_room sample has a real crack, used as the damage test | data/sample/single_room/damage.json | partial |
 | Same rooms at all three tiers | pipeline.py `process_stray_scan` runs all three on one scan | summary.json | done on samples, pending on user rooms |
-| One room captured twice, same tier | user capture pending | scripts/benchmark.py repeatability table | pending |
+| One room captured twice, same tier | 8 bedroom captures at the depth tier, 1 closes; 2 at the photo tier agree within 3.9 percent | docs/benchmark.md repeatability | partial: FAIL, the finding is that sparse captures do not close |
 | Laser or tape ground truth, raw data submitted | data/ground_truth/*.json, data/captures, data/sample | files | partial: one room so far |
 | Opening widths gate (2 cm on 85 percent) | scripts/benchmark.py | docs/benchmark.md | pending ground truth |
 | Ceiling height gate (1.5 cm, spread 1 cm) | scripts/benchmark.py | docs/benchmark.md | FAIL on bedroom (-10.6 cm at depth tier) |
@@ -64,7 +64,7 @@ the benchmark capture), not attempted.
 
 | requirement | file | artifact | status |
 |---|---|---|---|
-| Incremental commit history | git log | 40+ commits over two days | done |
+| Incremental commit history | git log | 58 commits over two days, one change each | done |
 
 ## Deliverables
 

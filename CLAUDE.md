@@ -140,3 +140,9 @@ addyosmani/agent-skills. Each SKILL.md notes its sources.
 
 Default: do not invoke a skill because it exists. tdd, incremental-implementation
 and minimal-code are the baseline.
+
+Artifacts the skills call for, all in the repo: docs/spec-floorplan.md and
+docs/todo.md (spec-and-planning), CONSTRAINTS.md (constraint-driven-development),
+CONTEXT.md and docs/decisions/0001 to 0005 (documentation-and-decisions), the
+review pass of 2026-09-20 and ruff/pip-audit in the dev group (code-review,
+minimal-code, security-and-hardening).
