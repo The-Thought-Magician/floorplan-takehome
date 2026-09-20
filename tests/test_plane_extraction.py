@@ -163,3 +163,31 @@ def test_outer_walls_drops_parallel_plane_inside_the_room():
     kept = outer_walls(walls)
     assert len(kept) == 4
     assert abs(polygon_area(wall_polygon(kept)) - 12.0) < 0.3
+
+
+def test_refine_wall_faces_moves_thick_bands_outward_and_leaves_thin_ones():
+    from floorplan_takehome.plane_extraction import refine_wall_faces
+
+    rng = np.random.default_rng(5)
+    # a 4 x 3 room: thin bands (LiDAR-like) on all walls
+    thin = []
+    for (x0, x1, z0, z1) in ((0, 0, 0, 3), (4, 4, 0, 3), (0, 4, 0, 0), (0, 4, 3, 3)):
+        xs = rng.uniform(x0, x1, 500) if x0 != x1 else x0 + rng.normal(0, 0.01, 500)
+        zs = rng.uniform(z0, z1, 500) if z0 != z1 else z0 + rng.normal(0, 0.01, 500)
+        pts = np.stack([xs, rng.uniform(0, 2.5, 500), zs], axis=1)
+        n = _refit_normal(pts)
+        thin.append(Plane(normal=n, d=-n @ pts.mean(axis=0), points=pts))
+    cloud_xz = np.concatenate([w.points[:, [0, 2]] for w in thin])
+    refined, log = refine_wall_faces(thin, cloud_xz)
+    assert all(abs(e["shift_cm"]) < 1 for e in log)
+    assert abs(polygon_area(wall_polygon(refined)) - 12.0) < 0.2
+
+    # now a thick band on the x=0 wall spread 30 cm into the room (x in [0, 0.3])
+    thick = list(thin)
+    pts = np.stack([rng.uniform(0.0, 0.3, 2000), rng.uniform(0, 2.5, 2000), rng.uniform(0, 3, 2000)], axis=1)
+    n = np.array([1.0, 0.0, 0.0])
+    thick[0] = Plane(normal=n, d=-n @ pts.mean(axis=0), points=pts)  # fitted at x = 0.15
+    cloud_xz = np.concatenate([w.points[:, [0, 2]] for w in thick])
+    refined, log = refine_wall_faces(thick, cloud_xz)
+    x_wall = min(c[0] for c in wall_polygon(refined))
+    assert -0.04 < x_wall < 0.09  # moved from 0.15 toward the true face at 0 (80th percentile of the band)

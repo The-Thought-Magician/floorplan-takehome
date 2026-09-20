@@ -6,16 +6,22 @@ Detects the capture format: a Stray Scanner export (odometry.csv + depth/), or a
 unpacked zip from the web capture page (capture.json).
 """
 
+import argparse
 import json
-import sys
 from pathlib import Path
 
-from floorplan_takehome import stray_scanner
+from floorplan_takehome import pipeline, stray_scanner
 from floorplan_takehome.pipeline import process_capture_dir, process_image_tiers, process_stray_scan
 
 if __name__ == "__main__":
-    src = Path(sys.argv[1])
-    out = Path(sys.argv[2]) if len(sys.argv) > 2 else src / "out"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("capture")
+    ap.add_argument("out", nargs="?")
+    ap.add_argument("--wall-face", choices=["centre", "outer"], default="outer", help="centre reproduces the pre-fix wall placement")
+    args = ap.parse_args()
+    pipeline.WALL_FACE = args.wall_face
+    src = Path(args.capture)
+    out = Path(args.out) if args.out else src / "out"
     scan = stray_scanner.find_scan_dir(src)
     if scan is not None:
         summary = process_stray_scan(scan, out)

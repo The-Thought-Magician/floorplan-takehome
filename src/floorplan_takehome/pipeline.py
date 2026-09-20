@@ -10,6 +10,7 @@ from floorplan_takehome.depth_capture import load_point_cloud
 from floorplan_takehome.plane_extraction import (
     manhattan_filter,
     outer_walls,
+    refine_wall_faces,
     merge_walls,
     polygon_area,
     polygon_perimeter,
@@ -51,12 +52,19 @@ def camera_positions(json_path: Path) -> np.ndarray:
     return np.array(positions) if positions else np.empty((0, 3))
 
 
-def reconstruct(cloud: o3d.geometry.PointCloud, source_tier: str, cameras: np.ndarray | None = None) -> dict:
+WALL_FACE = "outer"  # "centre" reproduces the pre-fix behaviour (fix loop, see docs/fix-loop.md)
+
+
+def reconstruct(cloud: o3d.geometry.PointCloud, source_tier: str, cameras: np.ndarray | None = None, wall_face: str | None = None) -> dict:
     o3d.utility.random.seed(0)  # RANSAC must give the same answer for the same capture
+    wall_face = wall_face or WALL_FACE
     cloud = clean_cloud(cloud)
     planes = segment_planes(cloud, distance_threshold=0.04, max_planes=10, min_inliers=80)
     raw_walls = merge_walls([p for p in planes if p.is_wall])
     walls = outer_walls(manhattan_filter(raw_walls))
+    face_log = []
+    if wall_face == "outer":
+        walls, face_log = refine_wall_faces(walls, np.asarray(cloud.points)[:, [0, 2]])
     corners = wall_polygon(walls)
 
     n_points = len(cloud.points)
@@ -107,6 +115,8 @@ def reconstruct(cloud: o3d.geometry.PointCloud, source_tier: str, cameras: np.nd
             "walls": len(walls),
             "walls_rejected_off_axis": len(raw_walls) - len(manhattan_filter(raw_walls)),
             "walls_rejected_interior": len(manhattan_filter(raw_walls)) - len(walls),
+            "wall_face": wall_face,
+            "wall_face_shifts": face_log,
             "closed": bool(corners),
             "height_source": height_source,
             "camera_height_m": None if camera_y is None or floor_y is None else round(camera_y - floor_y, 3),

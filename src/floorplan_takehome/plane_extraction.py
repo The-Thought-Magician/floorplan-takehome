@@ -127,6 +127,40 @@ def manhattan_filter(walls: list[Plane], max_dev_deg: float = 20.0) -> list[Plan
     return kept
 
 
+def refine_wall_faces(walls: list[Plane], cloud_xz: np.ndarray, percentile: float = 80.0, min_spread_m: float = 0.15) -> tuple[list[Plane], list[dict]]:
+    """Move each wall line from the band centre to the band's outer face.
+
+    Depth-from-motion fills textureless walls with points scattered mostly inside the
+    room, so a RANSAC line sits inside the true wall. When the band is thicker than
+    min_spread_m, the wall face is taken at `percentile` of the outward distance of all
+    points in the band. Thin bands (LiDAR) are left alone. Returns new walls and a log.
+    """
+    if len(walls) < 3:
+        return walls, []
+    all_pts = np.concatenate([w.points[:, [0, 2]] for w in walls], axis=0)
+    centre = all_pts.mean(axis=0)
+    out, log = [], []
+    for w in walls:
+        a, c, d = _xz_line(w)
+        n = np.array([a, c])
+        if centre @ n + d > 0:  # make the normal point out of the room
+            n, d = -n, -d
+        inl = w.points[:, [0, 2]] @ n + d
+        spread = float(np.percentile(inl, 90) - np.percentile(inl, 10))
+        t = np.array([-n[1], n[0]])
+        ext = (w.points[:, [0, 2]] - centre) @ t
+        along = (cloud_xz - centre) @ t
+        signed = cloud_xz @ n + d
+        band = (along > ext.min()) & (along < ext.max()) & (np.abs(signed) < 0.6)
+        shift = 0.0
+        if spread > min_spread_m and band.sum() > 100:
+            shift = float(np.percentile(signed[band], percentile))
+        new_d = d - shift  # line moves outward by shift
+        out.append(Plane(normal=np.array([n[0], 0.0, n[1]]), d=new_d, points=w.points))
+        log.append({"normal": [round(float(n[0]), 3), round(float(n[1]), 3)], "band_spread_cm": round(spread * 100, 1), "shift_cm": round(shift * 100, 1)})
+    return out, log
+
+
 def outer_walls(walls: list[Plane]) -> list[Plane]:
     """Keep the two outermost planes per room axis. Parallel planes between them are furniture."""
     groups: dict[int, list[tuple[float, Plane]]] = {0: [], 1: []}
