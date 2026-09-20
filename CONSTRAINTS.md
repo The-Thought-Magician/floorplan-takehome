@@ -28,9 +28,9 @@ Values on 2026-09-20. Each one must not regress; a tightening is silent, a loose
 | Synthetic yaw drift 1.2 deg/s | recovered within 5 deg/min | keep |
 | Bedroom depth tier walls vs tape (427 x 366 cm) | -1.3 and +1.8 percent | must not widen |
 | Bedroom depth tier ceiling vs tape (312 cm) | -10.6 cm | must shrink |
-| Bedroom photo tier walls, poses | -4.4 and -5.4 percent | must not widen |
+| Bedroom photo tier walls, poses plus MoGe FOV anchor | -2.6 and -3.8 percent | must not widen |
 | Bedroom photo tier walls, no poses (MoGe-2) | -7.4 and -9.0 percent | must not widen |
-| Bedroom video tier walls | -6.0 and -1.6 percent | must not widen |
+| Bedroom video tier walls, MoGe FOV anchor | -4.6 and -2.6 percent | must not widen |
 | Sample crack (single_room) | labelled crack | keep |
 | Undamaged bedroom | 0 damage regions | keep |
 | LiDAR sample rooms found | 3, 6, 5 | keep |

@@ -148,6 +148,7 @@ def reconstruct_images(
     known_poses: dict[int, np.ndarray] | None = None,
     conf_percentile: float = 30.0,
     cache: Path | None = None,
+    fov_x: dict[int, float] | None = None,
 ) -> tuple[o3d.geometry.PointCloud, np.ndarray, dict]:
     """Images to a point cloud plus camera centres.
 
@@ -164,9 +165,19 @@ def reconstruct_images(
     info = {"images": len(image_paths), "peak_vram_gb": out["peak_vram_gb"], "points": len(points)}
     if known_poses and len(known_poses) >= 3:
         scale, rotation, translation, fit = align_cameras(out["extrinsic"], known_poses)
+        info.update(fit)
+        fov = dict(fov_x or {}) or {i: f for i, p in enumerate(image_paths) if (f := fov_x_from_exif(p))}
+        if fov:
+            # Poses give orientation and placement. Scale from a pose fit is only as good as the
+            # baseline (40 percent off on a rotate-in-place capture); MoGe-2 with the true field of
+            # view measured within 3 percent of the tape, so it sets the scale when the FOV is known.
+            moge, mfit = moge_scale(image_paths, out, fov)
+            pivot = camera_centers_from_extrinsics(out["extrinsic"]).mean(axis=0)
+            translation = translation + (scale - moge) * (rotation @ pivot)  # keep the camera centroid fixed
+            info.update({"pose_scale": round(scale, 4), "scale": round(moge, 4), "scale_used": "moge2_with_fov", **mfit})
+            scale = moge
         points = apply_similarity(points, scale, rotation, translation)
         centers = apply_similarity(centers, scale, rotation, translation)
-        info.update(fit)
     else:
         # no poses: monocular metric depth is the only scale source. Gravity is
         # unknown too, so the cloud is levelled by its dominant floor plane later.
@@ -204,6 +215,15 @@ def photo_paths_and_poses(capture_dir: Path) -> tuple[list[str], dict[int, np.nd
         poses[len(paths)] = np.array(view["transform_matrix"], dtype=float).reshape(4, 4, order="F")
         paths.append(path)
     return paths, poses
+
+
+def photo_fov_x(capture_dir: Path) -> dict[int, float]:
+    """Horizontal field of view per photo from the capture page's projection matrix."""
+    fov = {}
+    for i, (_, view) in enumerate(photo_records(capture_dir)):
+        proj = np.array(view["projection_matrix"], dtype=float).reshape(4, 4, order="F")
+        fov[i] = float(np.degrees(2 * np.arctan(1 / proj[0, 0])))
+    return fov
 
 
 def video_frame_paths(capture_dir: Path, fps: float = 1.0) -> list[str]:

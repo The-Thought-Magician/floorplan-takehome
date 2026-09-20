@@ -184,6 +184,7 @@ def process_image_tiers(capture_dir: Path, plan: dict) -> dict:
     """
     from floorplan_takehome.multiview import (
         depth_scale_check,
+        photo_fov_x,
         photo_paths_and_poses,
         reconstruct_images,
         video_frame_paths,
@@ -192,6 +193,7 @@ def process_image_tiers(capture_dir: Path, plan: dict) -> dict:
     capture_dir = Path(capture_dir)
     tiers = {}
     photos, centers = photo_paths_and_poses(capture_dir)
+    fov = photo_fov_x(capture_dir)
     if not photos:  # files-only upload: any images under photos/, no poses
         photos = sorted(str(p) for p in (capture_dir / "photos").rglob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png"))
         centers = {}
@@ -208,20 +210,13 @@ def process_image_tiers(capture_dir: Path, plan: dict) -> dict:
     for tier, paths, known in jobs:
         try:
             cache = capture_dir / f"vggt_{tier}.npz"
-            cloud, cameras, info = reconstruct_images(paths, known, cache=cache)
+            # video frames share the photos' camera, so the photos' FOV applies to every image
+            fov_all = {i: (fov.get(i) if i < len(photos) else (np.median(list(fov.values())) if fov else None)) for i in range(len(paths))}
+            fov_all = {i: f for i, f in fov_all.items() if f}
+            cloud, cameras, info = reconstruct_images(paths, known, cache=cache, fov_x=fov_all)
             check = depth_scale_check(capture_dir, paths, cache)
-            if check and info.get("scale"):
-                # Pixel-wise depth agreement beats a pose fit on a short baseline (tape-verified,
-                # see plan.md). Rescale about the aligned cameras' centroid.
-                factor = check["depth_based_scale"] / info["scale"]
-                pivot = cameras.mean(axis=0)
-                pts = (np.asarray(cloud.points) - pivot) * factor + pivot
-                cloud.points = o3d.utility.Vector3dVector(pts)
-                cameras = (cameras - pivot) * factor + pivot
-                info["scale_check"] = check
-                info["scale_used"] = "arcore_depth"
-                info["pose_scale"] = info["scale"]
-                info["scale"] = check["depth_based_scale"]
+            if check:
+                info["arcore_depth_scale_check"] = check  # diagnostic only, measured 8 percent far
             tier_plan = reconstruct_multiroom(cloud, tier, cameras)
             _write_plan(tier_plan, cloud, cameras, capture_dir, tier, info)
             tiers[tier] = _tier_summary(tier_plan, info)

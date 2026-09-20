@@ -379,9 +379,9 @@ Photo gate is 8 percent, so this fails narrowly and honestly.
 |---|---|
 | depth (ARKit LiDAR) | ARKit metric depth, exact |
 | depth (Android ARCore) | ARCore VIO-fused metric depth, accuracy unverified |
-| video via our capture page | ARCore VIO poses recorded alongside the video |
-| video from elsewhere | VGGT relative output, MoGe-2 anchor (implemented) |
-| photos | VGGT relative output, MoGe-2 anchor (implemented), poses when recorded |
+| video via our capture page | MoGe-2 with the projection FOV for scale, poses for orientation and placement |
+| video from elsewhere | MoGe-2 with EXIF FOV when present, chunked VGGT |
+| photos | MoGe-2 with FOV (projection or EXIF), poses for placement when recorded |
 
 ## Architecture
 

@@ -10,14 +10,19 @@ per photo (capture page), or with nothing (iPhone Camera app).
 
 ## Decision
 Priority order, chosen per capture from what exists:
-1. Recorded poses: similarity transform from camera orientations (Procrustes)
-   and pairwise centre distances (median ratio). Used for walking captures.
-2. ARCore depth per pixel against VGGT depth on the same photo: used when the
-   capture page recorded depth for the photos. Beats the pose fit on a
-   rotate-in-place capture (measured: pose fit 40 percent off, depth 8 percent).
-3. MoGe-2 monocular metric depth against VGGT depth, median over the farther
-   half of the frames, field of view from EXIF when present. Used when nothing
-   else exists (the walk-in test's photos and video).
+1. MoGe-2 monocular metric depth against VGGT depth on the same frames, median
+   over the farther half of the frames, when the horizontal field of view is
+   known (capture page projection matrix, EXIF 35mm focal length on phone
+   photos). Poses, when present, still give orientation and placement.
+   Measured on the bedroom: photos -2.6 and -3.8 percent, video -4.6 and -2.6.
+2. Recorded poses alone: similarity transform from camera orientations and
+   pairwise centre distances. Used when no FOV is known. 40 percent off on a
+   rotate-in-place capture, 10 to 15 percent on a walking one.
+3. MoGe-2 with its own FOV estimate when neither poses nor FOV exist: 12 to 14
+   percent low on the bedroom.
+
+ARCore depth per pixel was the anchor before 2026-09-20 09:50; it measured 8
+percent far on this phone and is kept as a diagnostic in the output.
 
 ## Alternatives considered
 - MapAnything (metric out of the box): no consumer VRAM numbers, untested on 8 GB.
