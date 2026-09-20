@@ -56,6 +56,22 @@ recording, starting from the same doorway, same route.
 3. Do not zoom. Do not switch cameras. Do not pause.
 4. Export the .mov or .mp4 file, original quality (AirDrop, or Files > Save).
 
+## Scale marker (photo and video tiers, strongly recommended)
+
+Without depth, scale comes from a model and is 3 to 5 percent off. A printed
+reference brings it under 1 percent.
+
+1. Print docs/scale-marker-a4.png on A4 at 100 percent (no "fit to page").
+   Check with a ruler: the black square is 150 mm.
+2. Lay the sheet flat on the floor against a wall, fully visible, in at least
+   two photos or a few seconds of video. Do not fold it.
+3. Nothing else changes. The pipeline detects the marker and uses it for
+   scale; the plan records `scale_used: printed_marker`.
+
+If you have a laser or tape, the alternative is one measurement: the longest
+wall of the first room, passed as `--reference-length-cm` to the pipeline.
+The plan then inherits the measurement's error.
+
 ## Photo tier: Camera app
 
 1. Camera app, Photo, 1x lens, no zoom, no Live Photo, no portrait mode.

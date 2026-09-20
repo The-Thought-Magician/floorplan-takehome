@@ -90,3 +90,39 @@ def test_level_by_camera_up_rotates_mean_up_axis_to_y():
     level = level_by_camera_up(np.array(ext))
     up = -np.array(ext)[:, :, :3].transpose(0, 2, 1)[:, :, 1].mean(axis=0)
     np.testing.assert_allclose(level @ (up / np.linalg.norm(up)), [0, 1, 0], atol=1e-6)
+
+
+def test_marker_scale_reads_the_known_side_off_the_point_map(tmp_path):
+    import cv2
+
+    from floorplan_takehome.multiview import MARKER_ID, marker_scale
+
+    # a portrait photo with the marker drawn 300 px wide, and a synthetic VGGT point map where
+    # world x, y follow the pixel grid at 1 mm per photo pixel (so the 300 px side is 0.30 m)
+    ph_w, ph_h = 900, 1600
+    d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+    marker = cv2.aruco.generateImageMarker(d, MARKER_ID, 300)
+    img = np.full((ph_h, ph_w), 255, np.uint8)
+    img[600:900, 300:600] = marker
+    p = tmp_path / "m.jpg"
+    cv2.imwrite(str(p), img)
+    h, w = 518, 518
+    img_w = round(ph_w * h / ph_h / 14) * 14
+    x0 = (w - img_w) // 2
+    gy, gx = np.mgrid[0:h, 0:w].astype(float)
+    world = np.stack([(gx - x0) / img_w * ph_w / 1000.0, gy / h * ph_h / 1000.0, np.full_like(gx, 2.0)], axis=-1)
+    out = {"points": world[None], "conf": np.ones((1, h, w)), "extrinsic": np.eye(4)[None, :3]}
+    scale, info = marker_scale([str(p)], out, side_m=0.150)
+    assert info["marker_sightings"] == 1
+    assert abs(scale - 0.5) < 0.05  # known 0.15 m over a reconstructed 0.30 m
+
+
+def test_reference_length_rescales_the_whole_plan():
+    from floorplan_takehome.pipeline import apply_reference_length
+
+    plan = {"rooms": [{"polygon_cm": [[0, 0], [400, 0], [400, 300], [0, 300]], "wall_lengths_cm": [400.0, 300.0, 400.0, 300.0], "area_m2": 12.0, "perimeter_m": 14.0, "openings": [{"width_cm": 90.0, "from_corner_cm": 100.0}]}]}
+    out = apply_reference_length(plan, 420.0)
+    r = out["rooms"][0]
+    assert r["wall_lengths_cm"] == [420.0, 315.0, 420.0, 315.0]
+    assert abs(r["area_m2"] - 13.23) < 0.01
+    assert r["openings"][0]["width_cm"] == 94.5

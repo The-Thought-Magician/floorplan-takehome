@@ -478,3 +478,31 @@ def run_damage_for_stray(scan_dir: Path, out_dir: Path, plan: dict, backend: str
     plan["damage"] = {k: v for k, v in result.items() if k != "raw_detections"}
     (out_dir / "plan.json").write_text(json.dumps(plan, indent=2, default=str))
     return result
+
+
+def apply_reference_length(plan: dict, measured_cm: float) -> dict:
+    """Rescale every length in the plan so the longest wall of the first room equals a
+    laser or tape measurement. The whole plan shares one scale, so one reference fixes
+    all of it. Recorded in the output; intervals shrink to the reference's own error."""
+    rooms = [r for r in plan.get("rooms", []) if r.get("wall_lengths_cm")]
+    if not rooms:
+        return plan
+    longest = max(rooms[0]["wall_lengths_cm"])
+    k = measured_cm / longest
+    for r in plan["rooms"]:
+        if r.get("polygon_cm"):
+            r["polygon_cm"] = [[round(x * k, 1), round(z * k, 1)] for x, z in r["polygon_cm"]]
+        for key in ("wall_lengths_cm",):
+            if r.get(key):
+                r[key] = [round(v * k, 1) for v in r[key]]
+        for key in ("area_m2",):
+            if r.get(key) is not None:
+                r[key] = round(r[key] * k * k, 3)
+        if r.get("perimeter_m") is not None:
+            r["perimeter_m"] = round(r["perimeter_m"] * k, 3)
+        for o in r.get("openings", []):
+            for key in ("width_cm", "from_corner_cm"):
+                if o.get(key) is not None:
+                    o[key] = round(o[key] * k, 1)
+    plan["reference_length"] = {"measured_cm": measured_cm, "applied_factor": round(k, 4), "note": "one measured wall length rescales the plan; lengths inherit the measurement's error"}
+    return plan

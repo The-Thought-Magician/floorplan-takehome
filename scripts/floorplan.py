@@ -24,6 +24,7 @@ if __name__ == "__main__":
     ap.add_argument("capture")
     ap.add_argument("out", nargs="?")
     ap.add_argument("--wall-face", choices=["centre", "outer"], default="outer", help="centre reproduces the pre-fix wall placement")
+    ap.add_argument("--reference-length-cm", type=float, default=None, help="one laser or tape measured wall length (the longest wall of the first room); rescales photo and video plans")
     args = ap.parse_args()
     pipeline.WALL_FACE = args.wall_face
     src = Path(args.capture)
@@ -34,6 +35,16 @@ if __name__ == "__main__":
     elif (src / "capture.json").exists():
         plan = process_capture_dir(src)
         tiers = process_image_tiers(src, plan)
+        if args.reference_length_cm:
+            from floorplan_takehome.pipeline import apply_reference_length
+
+            for tier in ("photos", "video"):
+                f = src / f"plan_{tier}.json"
+                if f.exists():
+                    tp = apply_reference_length(json.loads(f.read_text()), args.reference_length_cm)
+                    f.write_text(json.dumps(tp, indent=2, default=str))
+                    tiers[tier]["wall_lengths_cm"] = [r.get("wall_lengths_cm") for r in tp["rooms"]]
+                    tiers[tier]["reference_length"] = tp["reference_length"]
         damage = run_damage_for_capture(src, plan)
         summary = {
             "depth": {"rooms": len(plan["rooms"]), "wall_lengths_cm": [r.get("wall_lengths_cm") for r in plan["rooms"]], "wall_height_cm": [r.get("wall_height_cm") for r in plan["rooms"]]},

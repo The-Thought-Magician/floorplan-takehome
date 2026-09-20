@@ -347,6 +347,31 @@ upload, no poses, no EXIF): closed rectangle 378 x 316 cm against 427 x 366,
 FOV itself; iPhone photos carry the 35mm focal length and should do better.
 Photo gate is 8 percent, so this fails narrowly and honestly.
 
+### What limits photo and video accuracy (2026-09-20, literature check)
+
+Question asked: can the photo and video tiers reach 0.01 to 0.05 percent? No.
+Published zero-shot indoor metric depth error is 6 to 7 percent (Metric3Dv2,
+UniDepthV2, DA3 metric on NYUv2), MoGe-2 7.3 percent without intrinsics,
+multi-view metric models 9 percent (AMB3R) to 32 percent (MapAnything on
+ScanNet). No paper reports room dimensions under 1 percent from RGB alone. The
+graders' laser is 1.5 mm at 4 m, 0.04 percent. Our -2.6 and -3.8 percent with
+the known FOV and far-frame anchor is already below the published single-model
+numbers.
+
+What does reach sub-percent is a physical reference: calibrated scale bars 0.1
+to 0.3 percent, a printed ChArUco or A4 sheet 0.3 to 1 percent, or one laser
+measured length as a constraint. Implemented:
+
+- `marker_scale`: a printed 150 mm ArUco marker (docs/scale-marker-a4.png) is
+  detected in the photos, its corners read off VGGT's point map, and the known
+  side sets the scale. Takes priority over MoGe when seen. Not yet tested on a
+  real photo, the unit test uses a synthetic point map.
+- `--reference-length-cm`: one measured wall rescales the photo and video plans.
+
+Frame density was also tested on the bedroom video: 1 fps -4.6/-2.6 percent,
+2 fps in one pass failed to close, 4 fps -1.5/-3.6 percent but 11.9 GB, past
+the card. Density is not the lever; the chunked 2 fps path stays.
+
 ## Damage detection findings (2026-09-20)
 
 - OWLv2 (local, Apache 2.0) localizes damage but confuses classes. Cozmo's

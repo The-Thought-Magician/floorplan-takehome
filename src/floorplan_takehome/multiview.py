@@ -167,7 +167,14 @@ def reconstruct_images(
         scale, rotation, translation, fit = align_cameras(out["extrinsic"], known_poses)
         info.update(fit)
         fov = dict(fov_x or {}) or {i: f for i, p in enumerate(image_paths) if (f := fov_x_from_exif(p))}
-        if fov:
+        marker = marker_scale(image_paths, out)
+        if marker:
+            moge, mfit = marker
+            pivot = camera_centers_from_extrinsics(out["extrinsic"]).mean(axis=0)
+            translation = translation + (scale - moge) * (rotation @ pivot)
+            info.update({"pose_scale": round(scale, 4), "scale": round(moge, 4), "scale_used": "printed_marker", **mfit})
+            scale = moge
+        elif fov:
             # Poses give orientation and placement. Scale from a pose fit is only as good as the
             # baseline (40 percent off on a rotate-in-place capture); MoGe-2 with the true field of
             # view measured within 3 percent of the tape, so it sets the scale when the FOV is known.
@@ -182,12 +189,18 @@ def reconstruct_images(
         # no poses: monocular metric depth is the only scale source. Gravity is
         # unknown too, so the cloud is levelled by its dominant floor plane later.
         fov = {i: f for i, p in enumerate(image_paths) if (f := fov_x_from_exif(p))}
-        scale, fit = moge_scale(image_paths, out, fov)
+        marker = marker_scale(image_paths, out)
+        if marker:
+            scale, fit = marker
+            fit["scale_used"] = "printed_marker"
+        else:
+            scale, fit = moge_scale(image_paths, out, fov)
+            fit["scale_used"] = "moge2"
         level = level_by_camera_up(out["extrinsic"])
         pivot = centers.mean(axis=0)
         points = (points - pivot) @ level.T * scale
         centers = (centers - pivot) @ level.T * scale
-        info.update({"scale": round(scale, 4), "scale_used": "moge2", "levelled_by": "camera_up", "fov_from_exif": len(fov), **fit})
+        info.update({"scale": round(scale, 4), "levelled_by": "camera_up", "fov_from_exif": len(fov), **fit})
 
     cloud = o3d.geometry.PointCloud()
     cloud.points = o3d.utility.Vector3dVector(points.astype(np.float64))
@@ -530,3 +543,51 @@ def moge_scale(image_paths: list[str], out: dict, fov_x: dict[int, float] | None
     if not per_frame:
         raise ValueError("MoGe found no usable overlap with the VGGT depth")
     return aggregate_frame_scales(per_frame)
+
+
+MARKER_SIDE_M = 0.150  # docs/scale-marker-a4.png printed at 100 percent
+MARKER_ID = 7
+
+
+def marker_scale(image_paths: list[str], out: dict, side_m: float = MARKER_SIDE_M, marker_id: int = MARKER_ID) -> tuple[float, dict] | None:
+    """Metric scale from a printed ArUco marker of known size seen in the images.
+
+    The marker's four corners are read off VGGT's world point map at their pixel
+    positions; the ratio of the known side to the reconstructed side is the scale.
+    Median over every sighting. Returns None when no image shows the marker. A
+    physical reference is the only route below 1 percent, see docs/plan.md.
+    """
+    import cv2
+
+    detector = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50), cv2.aruco.DetectorParameters())
+    pts = out["points"]
+    s, h, w, _ = pts.shape
+    ratios = []
+    for i, path in enumerate(image_paths):
+        img = cv2.imread(path)
+        if img is None:
+            continue
+        corners, ids, _ = detector.detectMarkers(img)
+        if ids is None or marker_id not in ids.ravel():
+            continue
+        quad = corners[list(ids.ravel()).index(marker_id)][0]  # (4, 2) pixels in the photo
+        ph_h, ph_w = img.shape[:2]
+        # photo pixel -> VGGT pad-mode grid pixel (long side 518, short side centred)
+        if ph_h >= ph_w:
+            img_w = round(ph_w * h / ph_h / 14) * 14
+            gx = quad[:, 0] / ph_w * img_w + (w - img_w) / 2
+            gy = quad[:, 1] / ph_h * h
+        else:
+            img_h = round(ph_h * w / ph_w / 14) * 14
+            gx = quad[:, 0] / ph_w * w
+            gy = quad[:, 1] / ph_h * img_h + (h - img_h) / 2
+        gi = np.clip(np.round(gy).astype(int), 0, h - 1)
+        gj = np.clip(np.round(gx).astype(int), 0, w - 1)
+        world = pts[i][gi, gj]
+        sides = [np.linalg.norm(world[k] - world[(k + 1) % 4]) for k in range(4)]
+        if min(sides) <= 1e-6:
+            continue
+        ratios.append(side_m / float(np.median(sides)))
+    if not ratios:
+        return None
+    return float(np.median(ratios)), {"marker_sightings": len(ratios), "marker_scale_min": round(min(ratios), 4), "marker_scale_max": round(max(ratios), 4)}
