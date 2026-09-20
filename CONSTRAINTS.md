@@ -31,6 +31,7 @@ Values on 2026-09-20. Each one must not regress; a tightening is silent, a loose
 | Bedroom photo tier walls, poses plus MoGe FOV anchor | -2.6 and -3.8 percent | must not widen |
 | Bedroom photo tier walls, no poses (MoGe-2) | -7.4 and -9.0 percent | must not widen |
 | Bedroom video tier walls, MoGe FOV anchor | -4.6 and -2.6 percent | must not widen |
+| Bedroom, one wall given as reference length: other wall, photos / video | -1.3 / +2.0 percent | must not widen |
 | Sample crack (single_room) | labelled crack | keep |
 | Undamaged bedroom | 0 damage regions | keep |
 | LiDAR sample rooms found | 3, 6, 5 | keep |
