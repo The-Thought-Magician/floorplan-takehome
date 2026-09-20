@@ -15,39 +15,89 @@
     background: #222; color: #eee; border: 1px solid #555; border-radius: 6px;
   }
   button:disabled { opacity: 0.4; }
-  #log { white-space: pre-wrap; max-height: 30vh; overflow-y: auto; font-size: 11px; color: #9c9; }
+  button.rec { background: #611; border-color: #c33; }
+  label { margin-right: 10px; white-space: nowrap; }
+  #log { white-space: pre-wrap; max-height: 28vh; overflow-y: auto; font-size: 11px; color: #9c9; }
+  #result img { max-width: 100%; margin-top: 6px; border: 1px solid #555; }
   canvas { display: block; width: 100%; height: 100%; }
+  #video-canvas, #photo-canvas { display: none; }
 </style>
 </head>
 <body>
 <div id="overlay">
-  <div>frames captured: <span id="count">0</span></div>
-  <div>center depth: <span id="depth">-</span> m</div>
-  <button id="start">start ar</button>
-  <button id="capture" disabled>capture frame</button>
-  <button id="export" disabled>export json</button>
-  <button id="stop" disabled>stop</button>
+  <div>frames: <span id="count">0</span> | photos: <span id="photo-count">0</span> | video: <span id="video-state">off</span> | depth <span id="depth">-</span> m</div>
+  <div>
+    <button id="start">start ar</button>
+    <button id="capture" disabled>capture</button>
+    <button id="record" disabled>record</button>
+    <button id="stop" disabled>stop</button>
+  </div>
+  <div>
+    <label><input type="checkbox" id="opt-photos" checked> photos</label>
+    <label><input type="checkbox" id="opt-video" checked> video</label>
+    <label><input type="checkbox" id="opt-upload" checked> upload to backend</label>
+  </div>
+  <div>
+    <button id="export" disabled>export zip</button>
+    <button id="upload" disabled>upload + process</button>
+  </div>
+  <div id="result"></div>
   <div id="log"></div>
 </div>
 <canvas id="gl-canvas"></canvas>
+<canvas id="video-canvas"></canvas>
+<canvas id="photo-canvas"></canvas>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
+const PAGE_VERSION = 7;
+const GRID_X = 20;          // coarse getDepthInMeters grid, kept as a decode cross-check
+const GRID_Y = 15;
+const VIDEO_FRAME_STRIDE = 2;   // draw every 2nd XR frame into the video (about 15 fps)
+const DEPTH_STREAM_STRIDE = 6;  // while recording, also store depth every 6th frame (about 5 fps)
+const JPEG_QUALITY = 0.92;
+const VIDEO_MAX_WIDTH = 960;
+const UPLOAD_LIMIT_BYTES = 95 * 1024 * 1024;  // Cloudflare quick tunnels reject request bodies over 100 MB
+
+const $ = (id) => document.getElementById(id);
 const log = (msg) => {
-  const el = document.getElementById('log');
-  el.textContent += msg + '\n';
-  el.scrollTop = el.scrollHeight;
+  $('log').textContent += msg + '\n';
+  $('log').scrollTop = $('log').scrollHeight;
   console.log(msg);
 };
 
-const GRID_X = 8;
-const GRID_Y = 6;
-
 let session = null;
 let gl = null;
+let binding = null;
 let refSpace = null;
-let captures = [];
+let readFbo = null;
+let frameIndex = 0;
+let latestFrame = null;      // { time, views, cameraTexture }
+let captures = [];           // depth + pose records
+let photos = [];             // { name, blob }
+let recorder = null;
+let recordedChunks = [];
+let videoPoses = [];
+let videoMime = null;
+let recordStart = 0;
+let cameraAccessGranted = false;
+let latestCameraSize = null;
+let pendingPhoto = false;    // camera texture is only valid inside the XR frame callback
+let photoFailures = 0;
 
-function updateCount() {
-  document.getElementById('count').textContent = captures.length;
+function updateCounts() {
+  $('count').textContent = captures.length;
+  $('photo-count').textContent = photos.length;
+  $('export').disabled = captures.length === 0;
+  $('upload').disabled = captures.length === 0;
+}
+
+function base64FromBuffer(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
 }
 
 function sampleDepthGrid(depthInfo) {
@@ -55,14 +105,8 @@ function sampleDepthGrid(depthInfo) {
   for (let j = 0; j < GRID_Y; j++) {
     const row = [];
     for (let i = 0; i < GRID_X; i++) {
-      const x = (i + 0.5) / GRID_X;
-      const y = (j + 0.5) / GRID_Y;
       let meters = null;
-      try {
-        meters = depthInfo.getDepthInMeters(x, y);
-      } catch (e) {
-        meters = null;
-      }
+      try { meters = depthInfo.getDepthInMeters((i + 0.5) / GRID_X, (j + 0.5) / GRID_Y); } catch (e) { meters = null; }
       row.push(meters);
     }
     grid.push(row);
@@ -70,10 +114,81 @@ function sampleDepthGrid(depthInfo) {
   return grid;
 }
 
-let latestFrameData = null;
+function packDepth(depthInfo) {
+  if (!depthInfo) return null;
+  return {
+    width: depthInfo.width,
+    height: depthInfo.height,
+    format: session.depthDataFormat || null,
+    raw_value_to_meters: depthInfo.rawValueToMeters,
+    norm_depth_buffer_from_norm_view: Array.from(depthInfo.normDepthBufferFromNormView.matrix),
+    data_b64: base64FromBuffer(depthInfo.data),
+  };
+}
+
+// Copy the current camera texture into a 2D canvas. Rows come back bottom-up from
+// readPixels, so the draw is flipped. Must run inside the XR frame callback.
+function drawCameraTo(canvas, texture, width, height, maxWidth = Infinity) {
+  if (!readFbo) readFbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, readFbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, session.renderState.baseLayer.framebuffer);
+    return false;
+  }
+  const pixels = new Uint8Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, session.renderState.baseLayer.framebuffer);
+
+  const image = new ImageData(new Uint8ClampedArray(pixels.buffer), width, height);
+  const tmp = drawCameraTo.tmp || (drawCameraTo.tmp = document.createElement('canvas'));
+  tmp.width = width; tmp.height = height;
+  tmp.getContext('2d').putImageData(image, 0, 0);
+
+  // Recording canvases larger than about 720p are unreliable with MediaRecorder on Android.
+  const scale = Math.min(1, maxWidth / width);
+  const outW = Math.round(width * scale);
+  const outH = Math.round(height * scale);
+  if (canvas.width !== outW || canvas.height !== outH) { canvas.width = outW; canvas.height = outH; }
+  const ctx = canvas.getContext('2d');
+  ctx.save();
+  ctx.scale(1, -1);
+  ctx.drawImage(tmp, 0, 0, width, height, 0, -outH, outW, outH);
+  ctx.restore();
+  return true;
+}
+
+function recordDepthFrame(kind) {
+  if (!latestFrame) return false;
+  const record = {
+    index: captures.length,
+    kind,
+    time: latestFrame.time,
+    views: latestFrame.views,
+  };
+  if (kind === 'manual' && $('opt-photos').checked) {
+    if (!latestFrame.camera) {
+      log('no camera image this frame, photo skipped');
+    } else {
+      const name = 'photos/' + String(captures.length).padStart(4, '0') + '.jpg';
+      const cam = latestFrame.camera;
+      if (drawCameraTo($('photo-canvas'), cam.texture, cam.width, cam.height)) {
+        record.photo = name;
+        record.photo_size = [cam.width, cam.height];
+        $('photo-canvas').toBlob((blob) => { photos.push({ name, blob }); updateCounts(); }, 'image/jpeg', JPEG_QUALITY);
+      } else if (photoFailures++ === 0) {
+        log('camera texture not readable (fbo status ' + gl.checkFramebufferStatus(gl.FRAMEBUFFER) + ', gl error ' + gl.getError() + ')');
+      }
+    }
+  }
+  captures.push(record);
+  updateCounts();
+  return true;
+}
 
 function onXRFrame(time, frame) {
   session.requestAnimationFrame(onXRFrame);
+  frameIndex++;
 
   const pose = frame.getViewerPose(refSpace);
   if (!pose) return;
@@ -84,108 +199,264 @@ function onXRFrame(time, frame) {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   const views = [];
+  let camera = null;
   for (const view of pose.views) {
     const viewport = glLayer.getViewport(view);
     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
 
     let depthInfo = null;
-    try {
-      depthInfo = frame.getDepthInformation(view);
-    } catch (e) {
-      depthInfo = null;
+    try { depthInfo = frame.getDepthInformation(view); } catch (e) { depthInfo = null; }
+
+    if (binding && view.camera) {
+      try {
+        const texture = binding.getCameraImage(view.camera);
+        camera = texture ? { texture, width: view.camera.width, height: view.camera.height } : null;
+      } catch (e) { camera = null; }
     }
 
-    const viewData = {
+    views.push({
       eye: view.eye,
       transform_matrix: Array.from(view.transform.matrix),
       projection_matrix: Array.from(view.projectionMatrix),
+      viewport: [viewport.width, viewport.height],
+      camera_size: camera ? [camera.width, camera.height] : null,
       depth_width: depthInfo ? depthInfo.width : null,
       depth_height: depthInfo ? depthInfo.height : null,
       raw_value_to_meters: depthInfo ? depthInfo.rawValueToMeters : null,
       depth_grid_meters: depthInfo ? sampleDepthGrid(depthInfo) : null,
-    };
-    views.push(viewData);
+      depth_buffer: packDepth(depthInfo),
+      depth_active: 'depthActive' in session ? session.depthActive : null,
+    });
 
     if (depthInfo) {
-      const center = depthInfo.getDepthInMeters(0.5, 0.5);
-      document.getElementById('depth').textContent = center.toFixed(3);
+      try { $('depth').textContent = depthInfo.getDepthInMeters(0.5, 0.5).toFixed(3); } catch (e) {}
+    } else {
+      $('depth').textContent = 'NONE';
     }
   }
 
-  latestFrameData = { time, views };
+  latestFrame = { time, views, camera };
+  if (camera) latestCameraSize = [camera.width, camera.height];
+
+  if (pendingPhoto) {
+    pendingPhoto = false;
+    recordDepthFrame('manual');
+    const last = captures[captures.length - 1];
+    const hasDepth = last.views.some((v) => v.depth_buffer);
+    log('captured frame ' + captures.length + (last.photo ? ' + photo' : '') + (hasDepth ? '' : ' (NO DEPTH, aim at a textured wall 1-3 m away and retry)'));
+  }
+
+  if (recorder && recorder.state === 'recording') {
+    if (camera && frameIndex % VIDEO_FRAME_STRIDE === 0) {
+      drawCameraTo($('video-canvas'), camera.texture, camera.width, camera.height, VIDEO_MAX_WIDTH);
+      videoPoses.push({
+        t_ms: Math.round(performance.now() - recordStart),
+        xr_time: time,
+        transform_matrix: views[0].transform_matrix,
+      });
+    }
+    if (frameIndex % DEPTH_STREAM_STRIDE === 0) recordDepthFrame('auto');
+  }
 }
 
 async function start() {
-  document.getElementById('start').disabled = true;
+  $('start').disabled = true;
+  $('result').innerHTML = '';
   try {
-    if (!navigator.xr) throw new Error('navigator.xr not present, need a secure context and a WebXR-capable browser');
-
-    const supported = await navigator.xr.isSessionSupported('immersive-ar');
-    if (!supported) throw new Error('immersive-ar not supported on this device/browser');
+    if (!navigator.xr) throw new Error('navigator.xr not present, need https and a WebXR-capable browser');
+    if (!(await navigator.xr.isSessionSupported('immersive-ar'))) throw new Error('immersive-ar not supported');
 
     session = await navigator.xr.requestSession('immersive-ar', {
       requiredFeatures: ['depth-sensing'],
-      optionalFeatures: ['dom-overlay'],
-      domOverlay: { root: document.getElementById('overlay') },
+      optionalFeatures: ['dom-overlay', 'camera-access'],
+      domOverlay: { root: $('overlay') },
       depthSensing: {
         usagePreference: ['cpu-optimized'],
-        dataFormatPreference: ['luminance-alpha', 'float32'],
+        dataFormatPreference: ['luminance-alpha', 'unsigned-short'],
+        depthTypeRequest: ['smooth'],
       },
     });
-    log('session started, dom-overlay: ' + (session.domOverlayState ? session.domOverlayState.type : 'unsupported'));
+    cameraAccessGranted = session.enabledFeatures ? session.enabledFeatures.includes('camera-access') : true;
+    log('session started, depth format: ' + session.depthDataFormat + ', usage: ' + session.depthUsage
+      + ', camera-access: ' + cameraAccessGranted);
 
-    const canvas = document.getElementById('gl-canvas');
+    const canvas = $('gl-canvas');
     gl = canvas.getContext('webgl2', { xrCompatible: true });
     if (!gl) throw new Error('webgl2 context creation failed');
     await gl.makeXRCompatible();
 
     session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+    binding = cameraAccessGranted ? new XRWebGLBinding(session, gl) : null;
     refSpace = await session.requestReferenceSpace('local');
 
     session.addEventListener('end', () => {
       log('session ended');
-      document.getElementById('start').disabled = false;
-      document.getElementById('capture').disabled = true;
-      document.getElementById('export').disabled = true;
-      document.getElementById('stop').disabled = true;
+      if (recorder && recorder.state === 'recording') recorder.stop();
+      $('start').disabled = false;
+      $('capture').disabled = true;
+      $('record').disabled = true;
+      $('stop').disabled = true;
       session = null;
+      binding = null;
+      readFbo = null;
     });
 
-    document.getElementById('capture').disabled = false;
-    document.getElementById('stop').disabled = false;
+    frameIndex = 0;
+    $('capture').disabled = false;
+    $('record').disabled = false;
+    $('stop').disabled = false;
     session.requestAnimationFrame(onXRFrame);
   } catch (e) {
     log('error: ' + e.message);
-    document.getElementById('start').disabled = false;
+    $('start').disabled = false;
   }
 }
 
-document.getElementById('start').addEventListener('click', start);
+function pickMime() {
+  const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4;codecs=avc1', 'video/mp4'];
+  return candidates.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || null;
+}
 
-document.getElementById('capture').addEventListener('click', () => {
-  if (!latestFrameData) {
-    log('no frame data yet');
-    return;
-  }
-  captures.push(latestFrameData);
-  updateCount();
-  document.getElementById('export').disabled = false;
-  log('captured frame ' + captures.length);
-});
+function startRecording() {
+  if (!latestFrame || !latestFrame.camera) { log('no camera image yet, camera-access may be missing'); return; }
+  videoMime = pickMime();
+  if (!videoMime) { log('MediaRecorder has no supported mime type'); return; }
+  const cam = latestFrame.camera;
+  const canvas = $('video-canvas');
+  drawCameraTo(canvas, cam.texture, cam.width, cam.height, VIDEO_MAX_WIDTH);
+  const stream = canvas.captureStream(30 / VIDEO_FRAME_STRIDE);
+  recorder = new MediaRecorder(stream, { mimeType: videoMime, videoBitsPerSecond: 3_000_000 });
+  recordedChunks = [];
+  videoPoses = [];
+  recorder.ondataavailable = (e) => { if (e.data.size) recordedChunks.push(e.data); };
+  recorder.onstop = () => {
+    $('video-state').textContent = 'saved ' + (recordedChunks.reduce((n, c) => n + c.size, 0) / 1e6).toFixed(1) + ' MB';
+    $('record').textContent = 'record';
+    $('record').classList.remove('rec');
+    updateCounts();
+  };
+  recordStart = performance.now();
+  recorder.start(1000);
+  $('video-state').textContent = 'recording';
+  $('record').textContent = 'stop rec';
+  $('record').classList.add('rec');
+  log('recording ' + videoMime + ' at ' + cam.width + 'x' + cam.height);
+}
 
-document.getElementById('export').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify({ grid_size: [GRID_X, GRID_Y], captures }, null, 2)], { type: 'application/json' });
+async function deviceMeta() {
+  const meta = {
+    page_version: PAGE_VERSION,
+    user_agent: navigator.userAgent,
+    captured_at: new Date().toISOString(),
+    depth_format: session ? session.depthDataFormat : null,
+    depth_usage: session ? session.depthUsage : null,
+    depth_type: session && 'depthType' in session ? session.depthType : null,
+    camera_access: cameraAccessGranted,
+    screen: [screen.width, screen.height],
+  };
+  try {
+    if (navigator.userAgentData) {
+      const hi = await navigator.userAgentData.getHighEntropyValues(['model', 'platformVersion']);
+      meta.device_model = hi.model;
+      meta.platform_version = hi.platformVersion;
+    }
+  } catch (e) {}
+  return meta;
+}
+
+async function buildZip(withVideo = true) {
+  const includePhotos = $('opt-photos').checked;
+  const includeVideo = withVideo && $('opt-video').checked && recordedChunks.length > 0;
+  const zip = new JSZip();
+  const capture = {
+    grid_size: [GRID_X, GRID_Y],
+    meta: await deviceMeta(),
+    captures: captures.map((c) => (includePhotos ? c : { ...c, photo: undefined })),
+    // poses are always kept, the video file itself may travel in a separate request
+    video: videoPoses.length ? { file: includeVideo ? 'video.webm' : null, mime: videoMime, frame_stride: VIDEO_FRAME_STRIDE, camera_size: latestCameraSize, poses: videoPoses } : null,
+  };
+  zip.file('capture.json', JSON.stringify(capture));
+  if (includePhotos) for (const p of photos) zip.file(p.name, p.blob);
+  if (includeVideo) zip.file('video.webm', new Blob(recordedChunks, { type: videoMime }));
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 3 } });
+  log('zip ' + (blob.size / 1e6).toFixed(1) + ' MB, frames ' + captures.length + ', photos ' + (includePhotos ? photos.length : 0) + ', video ' + includeVideo);
+  return blob;
+}
+
+async function exportZip() {
+  const blob = await buildZip();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'depth-capture-' + Date.now() + '.json';
+  a.download = 'capture-' + Date.now() + '.zip';
   a.click();
   URL.revokeObjectURL(url);
-});
+}
 
-document.getElementById('stop').addEventListener('click', () => {
-  if (session) session.end();
+async function postFile(url, blob, name) {
+  if (blob.size > UPLOAD_LIMIT_BYTES) {
+    log(name + ' is ' + (blob.size / 1e6).toFixed(0) + ' MB, over the tunnel limit, use export zip instead');
+    return null;
+  }
+  const form = new FormData();
+  form.append('file', blob, name);
+  let res;
+  try {
+    res = await fetch(url, { method: 'POST', body: form });
+  } catch (e) { log('upload of ' + name + ' failed: ' + e.message); return null; }
+  if (!res.ok) { log('upload of ' + name + ' rejected: ' + res.status + ' ' + (await res.text()).slice(0, 200)); return null; }
+  return res.json();
+}
+
+async function uploadZip() {
+  // depth + photos first (small), video as its own request so a big video never blocks the plan
+  const zip = await buildZip(false);
+  log('uploading ' + (zip.size / 1e6).toFixed(1) + ' MB');
+  const created = await postFile('/api/captures', zip, 'capture.zip');
+  if (!created) return;
+  const { id } = created;
+  log('uploaded as ' + id + ', processing');
+  let depthShown = false;
+  if ($('opt-video').checked && recordedChunks.length) {
+    const video = new Blob(recordedChunks, { type: videoMime });
+    log('uploading video ' + (video.size / 1e6).toFixed(1) + ' MB');
+    postFile('/api/captures/' + id + '/video', video, 'video.webm').then((r) => { if (r) log('video stored'); });
+  }
+  for (let i = 0; i < 400; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const status = await (await fetch('/api/captures/' + id)).json();
+    if (status.state === 'done' && !depthShown) {
+      depthShown = true;
+      const room = status.plan.rooms[0];
+      const summary = room.polygon_cm.length
+        ? 'area ' + room.area_m2 + ' m2, walls ' + room.wall_lengths_cm.join(' / ') + ' cm'
+        : 'no closed polygon, walls found: ' + status.plan.diagnostics.walls;
+      log('depth tier: ' + summary);
+      $('result').innerHTML = '<img src="/api/captures/' + id + '/plan.png?t=' + Date.now() + '">';
+      if (status.tiers_state) log('photo/video tiers running on the GPU, this takes a minute');
+    }
+    if (status.state === 'done' && (!status.tiers_state || status.tiers_state === 'done')) {
+      for (const [tier, t] of Object.entries(status.plan.tiers || {})) {
+        log(tier + ' tier: ' + (t.error ? t.error : (t.closed ? 'area ' + t.area_m2 + ' m2, walls ' + t.wall_lengths_cm.join(' / ') + ' cm' : 'not closed, walls ' + t.walls)
+          + (t.scale ? ', scale ' + t.scale + ', camera fit ' + t.camera_residual_cm_median + ' cm' : '') + ', vram ' + t.peak_vram_gb + ' GB'));
+        if (!t.error) $('result').innerHTML += '<img src="/api/captures/' + id + '/plan.png?tier=' + tier + '&t=' + Date.now() + '">';
+      }
+      return;
+    }
+    if (status.state === 'failed') { log('processing failed: ' + status.error); return; }
+  }
+  log('timed out waiting for result');
+}
+
+$('start').addEventListener('click', start);
+$('capture').addEventListener('click', () => { if (!latestFrame) log('no frame data yet'); else pendingPhoto = true; });
+$('record').addEventListener('click', () => {
+  if (recorder && recorder.state === 'recording') recorder.stop(); else startRecording();
 });
+$('stop').addEventListener('click', () => { if (session) session.end(); });
+$('export').addEventListener('click', () => exportZip().catch((e) => log('export failed: ' + e.message)));
+$('upload').addEventListener('click', () => uploadZip().catch((e) => log('upload failed: ' + e.message)));
+$('opt-upload').addEventListener('change', () => { $('upload').style.display = $('opt-upload').checked ? '' : 'none'; });
 </script>
 </body>
 </html>
