@@ -340,6 +340,13 @@ half of the frames, both aggregates recorded. Poseless clouds are levelled from
 the mean camera up axis (phones are held upright). MoGe-2 is MIT with commercial
 weights, 1.3 GB VRAM, 0.3 s per frame after loading.
 
+End-to-end poseless test (the bedroom's 10 page photos copied into a files-only
+upload, no poses, no EXIF): closed rectangle 378 x 316 cm against 427 x 366,
+-12 and -14 percent, levelled correctly, MoGe far-frame scale 2.16 against the
+2.30 the tape implies. The page's JPEGs carry no EXIF, so MoGe estimated the
+FOV itself; iPhone photos carry the 35mm focal length and should do better.
+Photo gate is 8 percent, so this fails narrowly and honestly.
+
 ## Damage detection findings (2026-09-20)
 
 - OWLv2 (local, Apache 2.0) localizes damage but confuses classes. Cozmo's
