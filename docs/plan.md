@@ -257,6 +257,66 @@ after the depth plan on every upload. Measured on the furnished-room capture:
   This is what the iPhone protocol will require, since there is no ARCore
   depth to anchor on there.
 
+## Sample data from Cozmo (2026-09-20)
+
+Three Stray Scanner exports (iOS LiDAR logging app): `single_room` (37s, 1715
+frames, actually 3 rooms), `single_scan_floor_only` (115s, 5251 frames, 6
+rooms, camera pointed at the floor), `single_scan_with_ceiling` (215s, 9745
+frames, 5 rooms plus corridor). Format per scan: `rgb.mp4` 1920x1440 HEVC 60
+fps, `depth/*.png` 256x192 uint16 mm, `confidence/*.png` 0-2, `odometry.csv`
+camera-to-world position plus quaternion per frame, `camera_matrix.csv` for
+the RGB resolution, `imu.csv` at 100 Hz. No ground truth was supplied.
+
+Findings that changed the code:
+
+- Odometry poses are camera-to-world in the OpenCV convention (x right, y down,
+  z forward), not ARKit's. Verified by trying all axis assignments: only that
+  one gives vertical walls and a floor 1.4m below the phone.
+- Frames are landscape sensor frames of a portrait capture. Rotate 270
+  degrees clockwise (from gravity in the poses) and rotate the pose by the
+  opposite angle. Verified against VGGT on ten consecutive frames: 1 to 2
+  degree rotation residual, under 8cm position residual, once both are right.
+- VGGT holds a room, not an apartment. 58 frames spanning three rooms gave a
+  29 degree median orientation error against the poses. Consecutive chunks of
+  16 frames, each aligned to its own poses and merged in the world frame, is
+  the fix (VGGT-Long pattern). Frames pitched more than 50 degrees off
+  horizontal (floor shots) are skipped.
+- Eight stills spread across an apartment do not overlap. The photo tier now
+  reconstructs each room's stills separately and places rooms by pose, which
+  is also what per-room photo folders in the assessment amount to.
+- IMU is not used. The poses are already gravity aligned and the IMU carries
+  nothing the odometry lacks for this task. Confidence maps are used, only
+  confidence 2 depth pixels enter the cloud.
+- Ceiling detection by global RANSAC is unstable across rooms with different
+  ceilings. Per-room floor and ceiling now come from the point height
+  histogram inside each room polygon.
+
+This settles the capture route for the LiDAR tier on iPhone: Stray Scanner,
+free, exports everything the pipeline needs, and Cozmo's own samples use it.
+
+## Multi-room segmentation (rooms.py)
+
+No learned model. From a y-up cloud with a known floor:
+
+1. Rotate to the dominant wall direction (Hough on the tall-point density).
+2. Rasterise at 3cm. A cell is wall if points occupy at least 3 of 4
+   half-metre height bands between floor+0.2 and floor+2.2 (furniture fails
+   the top bands, ceiling fails the bottom ones).
+3. Free space is every occupied non-wall cell, closed and hole-filled.
+4. Erode free space past a doorway half width (0.55m), label the cores as
+   rooms; a second erosion at 0.30m seeds corridors no room core reached.
+   Grow seeds back inside free space.
+5. Per room: open and close the mask with a 25cm square (removes notches),
+   trace the contour, classify edges by axis, remove edges under 30cm by
+   merging their perpendicular neighbours, intersect consecutive lines.
+6. Adjacency from touching grown regions, contact length as the opening
+   width, "doorway" up to 1.5m, "open" beyond.
+
+Known gaps: openings are only found between rooms, not to the outside or as
+windows. A room scanned only from its doorway gets the scanned footprint, not
+the room. Doorway widths from region contact overshoot when the shared wall
+was not scanned.
+
 ## Scale strategy summary
 
 | tier | scale source |
