@@ -14,6 +14,22 @@
   "measured_on": "2026-09-20",
   "length_cm": 426.7,
   "width_cm": 365.8,
-  "note": "14 ft by 12 ft wall to wall, ceiling 10 ft 3 in, all tape measured. Every capture listed is this room: three sessions on 2026-09-19 (coarse 20x15 depth grid page), three identical uploads of one 15-frame session and one 145-frame session on 2026-09-20.",
-  "ceiling_height_cm": 312.4
+  "note": "14 ft by 12 ft wall to wall, ceiling 10 ft 3 in, all tape measured. Every capture listed is this room: three sessions on 2026-09-19 (coarse 20x15 depth grid page), three identical uploads of one 15-frame session and one 145-frame session on 2026-09-20. Door and window tape measured 2026-09-20.",
+  "ceiling_height_cm": 312.4,
+  "openings": [
+    {
+      "kind": "door",
+      "leaf_width_cm": 91.4,
+      "leaf_height_cm": 193.0,
+      "frame_cm": 7.6,
+      "opening_width_cm": 106.7,
+      "note": "6 ft 4 in by 3 ft leaf, chaukhat (frame) 3 in; opening width assumes the frame on both sides, 3 ft 6 in"
+    },
+    {
+      "kind": "window",
+      "width_cm": 132.1,
+      "height_cm": 121.9,
+      "note": "4 ft 4 in by 4 ft"
+    }
+  ]
 }

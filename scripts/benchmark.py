@@ -110,6 +110,26 @@ def main(out_path: Path) -> None:
         h_gate = "n/a" if r["height_err_cm"] is None else ("PASS" if abs(r["height_err_cm"]) <= gate["height_cm"] else "FAIL")
         lines.append(f"| {r['capture']} | {r['tier']} | {r['rooms']} | {r['closed']} | {walls} | {h} | {wall_gate} | {h_gate} |")
 
+    lines += ["", "## Openings (gate: 2 cm on 85 percent, a miss or a phantom each count as a miss)", "", "| capture | tier | truth | detected | error cm | verdict |", "|---|---|---|---|---|---|"]
+    for r in rows:
+        gt = gts.get(r["capture"])
+        if not gt or not gt.get("openings"):
+            continue
+        plan = load_plans((ROOT / "data" / "captures" / r["capture"]) if (ROOT / "data" / "captures" / r["capture"]).exists() else ROOT / "data" / "sample" / r["capture"]).get(r["tier"], {})
+        detected = [o for room in plan.get("rooms", []) for o in room.get("openings", []) if o.get("kind") in ("door", "window")]
+        for truth in gt["openings"]:
+            width = truth.get("opening_width_cm") or truth.get("width_cm")
+            same = [o for o in detected if o["kind"] == truth["kind"]]
+            if not same:
+                lines.append(f"| {r['capture']} | {r['tier']} | {truth['kind']} {width} cm | none | | MISS |")
+                continue
+            best = min(same, key=lambda o: abs(o["width_cm"] - width))
+            err = best["width_cm"] - width
+            lines.append(f"| {r['capture']} | {r['tier']} | {truth['kind']} {width} cm | {best['width_cm']} cm | {err:+.1f} | {'PASS' if abs(err) <= 2 else 'FAIL'} |")
+        phantoms = len(detected) - sum(1 for t in gt["openings"] if any(o["kind"] == t["kind"] for o in detected))
+        if phantoms > 0:
+            lines.append(f"| {r['capture']} | {r['tier']} | | {phantoms} extra opening(s) | | PHANTOM |")
+
     lines += ["", "## Repeatability (same room, same tier, two or more captures)", ""]
     any_rep = False
     for (room, tier), caps in sorted(repeat.items()):
