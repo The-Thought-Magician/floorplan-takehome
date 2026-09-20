@@ -12,3 +12,5 @@ data/sample_lidar/*
 CLAUDE.md
 CLAUDE.local.md
 .claude/
+data/captures/*
+third_party/

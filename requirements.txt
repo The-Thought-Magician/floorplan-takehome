@@ -1,6 +1,11 @@
-numpy>=2.5.3
-opencv-python>=5.0.0.93
-open3d>=0.20.0
-scipy>=1.18.1
-trimesh>=5.1.0
-matplotlib>=3.11.2
+fastapi==0.141.1
+matplotlib==3.11.2
+numpy==2.5.3
+open3d==0.20.0
+opencv-python==5.0.0.93
+python-multipart==0.0.32
+scipy==1.18.1
+torch==2.14.0
+torchvision==0.29.0
+trimesh==5.1.0
+uvicorn==0.53.0
