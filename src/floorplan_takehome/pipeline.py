@@ -68,8 +68,11 @@ def reconstruct(cloud: o3d.geometry.PointCloud, source_tier: str, cameras: np.nd
     if wall_height is None and walls:
         # walls run floor to ceiling, so the vertical extent of their inliers is the room height
         extents = [np.percentile(w.points[:, 1], 99) - np.percentile(w.points[:, 1], 1) for w in walls]
-        wall_height = float(np.median(extents))
-        height_source = "wall_extent"
+        if np.median(extents) >= 2.0:  # anything lower means the ceiling was never observed
+            wall_height = float(np.median(extents))
+            height_source = "wall_extent"
+        else:
+            height_source = "ceiling_not_observed"
 
     room = {
         "id": "room-1",
@@ -236,8 +239,9 @@ def rooms_to_schema(rooms, floor_y, ceiling_y, wall_height_cm, source_tier: str)
                 "wall_lengths_cm": [round(l * 100, 1) for l in r.wall_lengths_m],
                 "area_m2": round(r.area_m2, 3),
                 "perimeter_m": round(sum(r.wall_lengths_m), 3),
-                "wall_height_cm": wall_height_cm,
-                "openings": [{"to": f"room-{d['to']}", "width_cm": round(d["width_m"] * 100, 1), "kind": "doorway"} for d in r.doorways],
+                "wall_height_cm": round((r.ceiling_y - r.floor_y) * 100, 1) if r.floor_y is not None and r.ceiling_y is not None else wall_height_cm,
+                "height_source": "room_layers" if r.floor_y is not None and r.ceiling_y is not None else "global",
+                "openings": [{"to": f"room-{d['to']}", "width_cm": round(d["width_m"] * 100, 1), "kind": d.get("kind", "doorway")} for d in r.doorways],
                 "confidence": None,
                 "source_tier": source_tier,
             }

@@ -25,6 +25,33 @@ class RoomPolygon:
     area_m2: float
     wall_lengths_m: list[float]
     doorways: list[dict] = field(default_factory=list)
+    floor_y: float | None = None
+    ceiling_y: float | None = None
+
+
+def room_heights(points: np.ndarray, corners_xz: np.ndarray, floor_hint: float, bin_m: float = 0.02) -> tuple[float | None, float | None]:
+    """Floor and ceiling height inside one room polygon from the two strongest horizontal
+    point layers: the lowest peak near the floor hint and the highest peak above 2 m."""
+    inside = cv2.pointPolygonTest
+    poly = corners_xz.astype(np.float32).reshape(-1, 1, 2)
+    xz = points[:, [0, 2]].astype(np.float32)
+    # bounding-box prefilter, then exact polygon test on the survivors
+    lo, hi = corners_xz.min(axis=0), corners_xz.max(axis=0)
+    box = (xz[:, 0] >= lo[0]) & (xz[:, 0] <= hi[0]) & (xz[:, 1] >= lo[1]) & (xz[:, 1] <= hi[1])
+    idx = np.flatnonzero(box)
+    if len(idx) > 60000:
+        idx = idx[:: len(idx) // 60000]
+    keep = np.array([inside(poly, (float(x), float(z)), False) >= 0 for x, z in xz[idx]])
+    y = points[idx[keep], 1]
+    if len(y) < 200:
+        return None, None
+    hist, edges = np.histogram(y, bins=np.arange(y.min(), y.max() + bin_m, bin_m))
+    centers = (edges[:-1] + edges[1:]) / 2
+    near_floor = np.abs(centers - floor_hint) < 0.25
+    floor = float(centers[near_floor][np.argmax(hist[near_floor])]) if near_floor.any() and hist[near_floor].max() > 20 else None
+    high = centers > (floor if floor is not None else floor_hint) + 2.0
+    ceiling = float(centers[high][np.argmax(hist[high])]) if high.any() and hist[high].max() > 20 else None
+    return floor, ceiling
 
 
 def dominant_angle(wall_xz: np.ndarray) -> float:
@@ -206,7 +233,8 @@ def segment_rooms(
             continue
         corners = _rotate(corners_rot, -angle)
         lengths = [float(np.linalg.norm(corners[(i + 1) % len(corners)] - corners[i])) for i in range(len(corners))]
-        rooms.append(RoomPolygon(label=room_id, corners_xz=corners, area_m2=_polygon_area(corners), wall_lengths_m=lengths))
+        fy, cy = room_heights(points, corners, floor_y)
+        rooms.append(RoomPolygon(label=room_id, corners_xz=corners, area_m2=_polygon_area(corners), wall_lengths_m=lengths, floor_y=fy, ceiling_y=cy))
 
     # adjacency: rooms whose grown regions touch, contact length as doorway width
     for a in range(len(rooms)):
@@ -216,8 +244,9 @@ def segment_rooms(
             contact = int((ma & mb).sum())
             if contact >= int(0.5 / cell):
                 width = contact * cell
-                rooms[a].doorways.append({"to": rooms[b].label, "width_m": round(width, 2)})
-                rooms[b].doorways.append({"to": rooms[a].label, "width_m": round(width, 2)})
+                kind = "doorway" if width <= 1.5 else "open"  # wider than a door: open plan or unscanned wall
+                rooms[a].doorways.append({"to": rooms[b].label, "width_m": round(width, 2), "kind": kind})
+                rooms[b].doorways.append({"to": rooms[a].label, "width_m": round(width, 2), "kind": kind})
 
     info = {
         "rotation_deg": round(float(np.degrees(angle)), 2),

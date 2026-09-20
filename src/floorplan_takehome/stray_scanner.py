@@ -136,21 +136,69 @@ def poses_webxr(poses: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {k: m @ _CV_TO_GL for k, m in poses.items()}
 
 
-def video_frames_with_poses(scan: Path, out_dir: Path, every: int = 60) -> tuple[list[str], dict[int, np.ndarray]]:
-    """Extract every Nth frame of rgb.mp4 (frame i of the video is odometry frame i)."""
+_ROT = {0: None, 90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+
+
+def upright_rotation(poses_cv: dict[str, np.ndarray]) -> int:
+    """Image rotation (degrees clockwise) that puts gravity down in the frames.
+
+    The sensor frame is landscape. If the phone was held portrait, camera x points along
+    gravity. Pick the in-plane rotation whose new image-down axis points down in the world.
+    """
+    down = np.array([0.0, -1.0, 0.0])
+    best, best_score = 0, -2.0
+    for deg in (0, 90, 180, 270):
+        th = np.radians(deg)
+        score = 0.0
+        for m in list(poses_cv.values())[::50]:
+            x, y = m[:3, 0], m[:3, 1]
+            new_y = -np.sin(th) * x + np.cos(th) * y  # image-down axis after rotating the image clockwise by deg
+            score += float(new_y @ down)
+        if score > best_score:
+            best, best_score = deg, score
+    return best
+
+
+def rotate_pose_cv(m: np.ndarray, deg: int) -> np.ndarray:
+    """Camera-to-world after rotating the image clockwise by deg (OpenCV axes)."""
+    # verified against VGGT on the sample scans: image rotated 270 clockwise pairs with -270
+    th = -np.radians(deg)
+    rz = np.array([[np.cos(th), -np.sin(th), 0], [np.sin(th), np.cos(th), 0], [0, 0, 1]])
+    out = m.copy()
+    out[:3, :3] = m[:3, :3] @ rz
+    return out
+
+
+def video_frames_with_poses(scan: Path, out_dir: Path, every: int = 60, upright: bool = True) -> tuple[list[str], dict[int, np.ndarray]]:
+    """Extract every Nth frame of rgb.mp4 (frame i of the video is odometry frame i).
+
+    Frames are rotated upright (portrait capture) and the poses adjusted to match, so a
+    view model sees walls vertical.
+    """
     import subprocess
 
     scan, out_dir = Path(scan), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    if not any(out_dir.glob("*.jpg")):
+    poses_cv = load_odometry(scan)
+    deg = upright_rotation(poses_cv) if upright else 0
+    marker = out_dir / f"rotation_{deg}.txt"
+    if not marker.exists():
+        for old in out_dir.glob("*.jpg"):
+            old.unlink()
+        for old in out_dir.glob("rotation_*.txt"):
+            old.unlink()
         subprocess.run(
             ["ffmpeg", "-v", "error", "-y", "-i", str(scan / "rgb.mp4"), "-vf", f"select=not(mod(n\\,{every}))",
              "-vsync", "vfr", "-q:v", "2", str(out_dir / "%05d.jpg")],
             check=True,
         )
-    poses = poses_webxr(load_odometry(scan))
+        if deg:
+            for jpg in out_dir.glob("*.jpg"):
+                cv2.imwrite(str(jpg), cv2.rotate(cv2.imread(str(jpg)), _ROT[deg]))
+        marker.write_text(str(deg))
+    poses = poses_webxr({k: rotate_pose_cv(m, deg) for k, m in poses_cv.items()})
     paths, known = [], {}
-    for k, jpg in enumerate(sorted(out_dir.glob("*.jpg"))):
+    for jpg in sorted(out_dir.glob("*.jpg")):
         frame = f"{(int(jpg.stem) - 1) * every:06d}"
         if frame in poses:
             known[len(paths)] = poses[frame]
