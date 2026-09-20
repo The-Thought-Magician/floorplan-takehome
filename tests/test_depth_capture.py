@@ -129,3 +129,14 @@ def test_buffer_falls_back_to_grid_when_inconsistent():
 def test_points_beyond_max_range_are_dropped():
     view = _identity_view([[1.0, 9.0]])
     assert _unproject_grid(view, max_range_m=6.0).shape == (1, 3)
+
+
+def test_landscape_pose_gets_a_roll_correction_and_portrait_does_not():
+    from floorplan_takehome.depth_capture import roll_correction
+
+    portrait = np.eye(4)
+    assert np.allclose(roll_correction(portrait), np.eye(3))
+    rolled = np.eye(4)
+    rolled[:3, :3] = np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]], dtype=float)  # camera x points down (-y world)
+    r = roll_correction(rolled)
+    assert np.allclose(r @ np.array([1.0, 0.0, 0.0]), [0.0, 1.0, 0.0])  # image right becomes camera up

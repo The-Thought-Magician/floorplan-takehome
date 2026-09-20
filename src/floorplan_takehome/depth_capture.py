@@ -106,9 +106,29 @@ def _unproject_grid(view: dict, max_range_m: float = 6.0) -> np.ndarray:
     x_cam = (ndc_x[valid] + cx) * d / fx
     y_cam = (ndc_y[valid] + cy) * d / fy
     z_cam = -d
-    cam_points = np.stack([x_cam, y_cam, z_cam, np.ones_like(d)], axis=0)
-    world = (cam_to_world @ cam_points)[:3].T
+    cam_points = np.stack([x_cam, y_cam, z_cam], axis=0)
+    cam_points = roll_correction(cam_to_world) @ cam_points
+    world = (cam_to_world[:3, :3] @ cam_points).T + cam_to_world[:3, 3]
     return world
+
+
+def roll_correction(cam_to_world: np.ndarray) -> np.ndarray:
+    """Rotation to apply to camera-frame points when the phone was held landscape.
+
+    Chrome keeps the WebXR view portrait while the pose follows the physical phone,
+    so with the phone rolled 90 degrees the depth image is rotated relative to the
+    pose's camera axes. Verified on a landscape capture: only a +90 degree roll
+    (camera x axis pointing at the floor) turns its horizontal planes into walls.
+    """
+    x_world_y = cam_to_world[1, 0]
+    if x_world_y < -0.7:
+        deg = 90.0
+    elif x_world_y > 0.7:
+        deg = -90.0
+    else:
+        return np.eye(3)
+    th = np.radians(deg)
+    return np.array([[np.cos(th), -np.sin(th), 0.0], [np.sin(th), np.cos(th), 0.0], [0.0, 0.0, 1.0]])
 
 
 def load_point_cloud(json_path: str, max_range_m: float = 6.0) -> o3d.geometry.PointCloud:
