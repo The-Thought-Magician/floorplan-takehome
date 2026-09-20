@@ -9,8 +9,5 @@ data/sample_video/*
 data/sample_lidar/*
 .DS_Store
 
-CLAUDE.md
-CLAUDE.local.md
-.claude/
 data/captures/*
 third_party/
