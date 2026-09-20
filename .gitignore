@@ -11,3 +11,5 @@ data/sample_lidar/*
 data/sample*
 data/captures/*
 third_party/
+data/fixloop/*/capture.json
+data/fixloop/*/cloud*.ply

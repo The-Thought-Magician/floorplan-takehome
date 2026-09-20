@@ -1,0 +1,152 @@
+{
+  "rooms": [
+    {
+      "id": "room-1",
+      "label": "room",
+      "polygon_cm": [
+        [
+          -78.8,
+          -113.4
+        ],
+        [
+          340.8,
+          -79.0
+        ],
+        [
+          310.4,
+          292.2
+        ],
+        [
+          -109.2,
+          257.8
+        ]
+      ],
+      "wall_height_cm": null,
+      "openings": [],
+      "confidence": 0.343,
+      "source_tier": "depth",
+      "area_m2": 15.678,
+      "perimeter_m": 15.868,
+      "wall_lengths_cm": [
+        421.0,
+        372.4,
+        421.0,
+        372.4
+      ],
+      "wall_lengths_interval_cm": [
+        [
+          347.9,
+          494.1
+        ],
+        [
+          306.5,
+          438.3
+        ],
+        [
+          347.9,
+          494.1
+        ],
+        [
+          306.5,
+          438.3
+        ]
+      ],
+      "wall_height_interval_cm": null,
+      "area_interval_m2": [
+        11.759,
+        19.598
+      ]
+    }
+  ],
+  "diagnostics": {
+    "points": 277007,
+    "planes": 10,
+    "tilted_planes_rejected": 0,
+    "walls": 4,
+    "walls_rejected_off_axis": 1,
+    "walls_rejected_interior": 0,
+    "wall_face": "outer",
+    "wall_face_shifts": [
+      {
+        "normal": [
+          -0.997,
+          -0.082
+        ],
+        "band_spread_cm": 32.4,
+        "shift_cm": 8.8
+      },
+      {
+        "normal": [
+          0.997,
+          0.082
+        ],
+        "band_spread_cm": 49.8,
+        "shift_cm": 19.2
+      },
+      {
+        "normal": [
+          0.082,
+          -0.997
+        ],
+        "band_spread_cm": 66.3,
+        "shift_cm": 37.7
+      },
+      {
+        "normal": [
+          -0.082,
+          0.997
+        ],
+        "band_spread_cm": 50.3,
+        "shift_cm": 20.7
+      }
+    ],
+    "closed": true,
+    "height_source": "ceiling_not_observed",
+    "camera_height_m": null,
+    "floor_y": null,
+    "ceiling_y": null,
+    "wall_lines": [
+      {
+        "normal": [
+          -0.9967,
+          0.0,
+          -0.0816
+        ],
+        "d": -0.8781,
+        "points": 7892
+      },
+      {
+        "normal": [
+          0.9967,
+          0.0,
+          0.0816
+        ],
+        "d": -3.3317,
+        "points": 34429
+      },
+      {
+        "normal": [
+          0.0816,
+          0.0,
+          -0.9967
+        ],
+        "d": -1.0655,
+        "points": 21214
+      },
+      {
+        "normal": [
+          -0.0816,
+          0.0,
+          0.9967
+        ],
+        "d": -2.6588,
+        "points": 31560
+      }
+    ]
+  },
+  "capture": {
+    "photos": [],
+    "video": null
+  },
+  "interval_basis": "prior widened by one tape check: -8 to -14 percent on walls"
+}

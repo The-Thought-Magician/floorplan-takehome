@@ -1,0 +1,119 @@
+{
+  "rooms": [
+    {
+      "id": "room-1",
+      "label": "room",
+      "polygon_cm": [
+        [
+          -73.2,
+          -75.0
+        ],
+        [
+          318.5,
+          -43.0
+        ],
+        [
+          292.9,
+          270.0
+        ],
+        [
+          -98.8,
+          237.9
+        ]
+      ],
+      "wall_height_cm": null,
+      "openings": [],
+      "confidence": 0.343,
+      "source_tier": "depth",
+      "area_m2": 12.339,
+      "perimeter_m": 14.14,
+      "wall_lengths_cm": [
+        393.0,
+        314.0,
+        393.0,
+        314.0
+      ],
+      "wall_lengths_interval_cm": [
+        [
+          324.1,
+          461.9
+        ],
+        [
+          256.9,
+          371.1
+        ],
+        [
+          324.1,
+          461.9
+        ],
+        [
+          256.9,
+          371.1
+        ]
+      ],
+      "wall_height_interval_cm": null,
+      "area_interval_m2": [
+        9.254,
+        15.424
+      ]
+    }
+  ],
+  "diagnostics": {
+    "points": 277007,
+    "planes": 10,
+    "tilted_planes_rejected": 0,
+    "walls": 4,
+    "walls_rejected_off_axis": 1,
+    "walls_rejected_interior": 0,
+    "wall_face": "centre",
+    "wall_face_shifts": [],
+    "closed": true,
+    "height_source": "ceiling_not_observed",
+    "camera_height_m": null,
+    "floor_y": null,
+    "ceiling_y": null,
+    "wall_lines": [
+      {
+        "normal": [
+          0.9967,
+          0.0,
+          0.0816
+        ],
+        "d": 0.7906,
+        "points": 7892
+      },
+      {
+        "normal": [
+          -0.9967,
+          0.0,
+          -0.0816
+        ],
+        "d": 3.1396,
+        "points": 34429
+      },
+      {
+        "normal": [
+          0.0816,
+          0.0,
+          -0.9967
+        ],
+        "d": -0.688,
+        "points": 21214
+      },
+      {
+        "normal": [
+          -0.0816,
+          0.0,
+          0.9967
+        ],
+        "d": -2.4516,
+        "points": 31560
+      }
+    ]
+  },
+  "capture": {
+    "photos": [],
+    "video": null
+  },
+  "interval_basis": "prior widened by one tape check: -8 to -14 percent on walls"
+}
