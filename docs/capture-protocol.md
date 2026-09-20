@@ -12,6 +12,9 @@ Every tier ends with a folder handed to the pipeline, one command per capture.
 | Photos | built-in Camera app | iPhone 15 or newer | none |
 | Head-to-head | magicplan (App Store, Play Store) | same device | free tier |
 
+Polycam is not an alternative for the head-to-head from Android: its dimensioned
+Space and Floorplan modes need iPhone LiDAR, and Android has photo mode only.
+
 Android phones with ARCore can also do the depth tier through the web capture
 page served by the pipeline (Chrome, no install). That path is described in
 docs/plan.md and is not part of this protocol.

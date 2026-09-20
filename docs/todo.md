@@ -54,6 +54,10 @@ Vertical slices, each demoable on its own. Checked items are done and in git.
   - acceptance: findings closed or recorded, ruff clean, tests pass
   - verify: `uv run ruff check src scripts tests`, `uv run pytest -q`
   - depends on: everything above
+- [ ] Marker test on a real photo
+  - acceptance: printed marker detected, scale_used printed_marker, walls within 1 percent
+  - verify: upload six photos with the marker in view
+  - depends on: user printing the marker, which the user cannot do; stays open
 - [ ] Second closed bedroom capture (repeat)
   - acceptance: two depth-tier captures of the bedroom both close, wall agreement scored
   - verify: docs/benchmark.md repeatability table
