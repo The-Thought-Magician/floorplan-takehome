@@ -49,3 +49,17 @@ def test_align_cameras_recovers_similarity_from_orientations_and_centres():
     np.testing.assert_allclose(rotation, rot_true, atol=1e-9)
     np.testing.assert_allclose(translation, t_true, atol=1e-9)
     assert info["rotation_residual_deg_max"] < 1e-6
+
+
+def test_horizontal_frames_drops_floor_facing_cameras():
+    from floorplan_takehome.multiview import horizontal_frames
+
+    def pose(pitch_deg):
+        th = np.radians(pitch_deg)
+        m = np.eye(4)
+        # camera looks along -z rotated about x by pitch (positive = up)
+        m[:3, :3] = np.array([[1, 0, 0], [0, np.cos(th), -np.sin(th)], [0, np.sin(th), np.cos(th)]])
+        return m
+
+    poses = {0: pose(0), 1: pose(-70), 2: pose(30), 3: pose(80)}
+    assert horizontal_frames(poses) == [0, 2]

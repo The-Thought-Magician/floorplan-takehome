@@ -303,7 +303,7 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
     import time
 
     from floorplan_takehome import stray_scanner as ss
-    from floorplan_takehome.multiview import reconstruct_images
+    from floorplan_takehome.multiview import reconstruct_images, reconstruct_video_chunked
 
     scan_dir, out_dir = Path(scan_dir), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -319,12 +319,15 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
 
     if run_image_tiers:
         n_frames = len(cameras)
-        every = max(30, int(np.ceil(n_frames / max_images)))
+        every = 30  # 2 frames per second at 60 fps; chunking bounds memory, not the frame count
         for tier, step in (("video", every), ("photos", max(every, n_frames // 8))):
             t = time.time()
             try:
                 paths, known = ss.video_frames_with_poses(scan_dir, out_dir / f"frames_{tier}", every=step)
-                cloud_t, cams_t, info = reconstruct_images(paths, known, cache=out_dir / f"vggt_{tier}.npz")
+                if tier == "video":
+                    cloud_t, cams_t, info = reconstruct_video_chunked(paths, known, cache_dir=out_dir / "vggt_video_chunks")
+                else:
+                    cloud_t, cams_t, info = reconstruct_images(paths, known, cache=out_dir / f"vggt_{tier}.npz")
                 plan_t = reconstruct_multiroom(cloud_t, tier, cams_t)
                 _write_plan(plan_t, cloud_t, cams_t, out_dir, tier)
                 summary[tier] = _tier_summary(plan_t, info)

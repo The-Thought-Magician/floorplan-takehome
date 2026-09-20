@@ -253,3 +253,65 @@ def depth_scale_check(capture_dir: Path, image_paths: list[str], cache: Path, co
         "depth_based_scale_max": round(max(per_frame), 3),
         "frames": len(per_frame),
     }
+
+
+def horizontal_frames(known_poses: dict[int, np.ndarray], max_pitch_deg: float = 50.0) -> list[int]:
+    """Indices whose viewing direction is within max_pitch_deg of horizontal (WebXR poses, look = -z)."""
+    keep = []
+    for i, m in known_poses.items():
+        look = -m[:3, 2]
+        pitch = np.degrees(np.arcsin(np.clip(look[1], -1, 1)))
+        if abs(pitch) <= max_pitch_deg:
+            keep.append(i)
+    return sorted(keep)
+
+
+def reconstruct_video_chunked(
+    image_paths: list[str],
+    known_poses: dict[int, np.ndarray],
+    chunk: int = 16,
+    overlap: int = 4,
+    conf_percentile: float = 30.0,
+    cache_dir: Path | None = None,
+) -> tuple[o3d.geometry.PointCloud, np.ndarray, dict]:
+    """Long walks in overlapping chunks of consecutive frames, each chunk aligned to its
+    own known poses, merged in the world frame. A feed-forward model holds a room, not
+    a whole apartment, and known poses make every chunk independently metric.
+    """
+    idx = horizontal_frames(known_poses)
+    if len(idx) < 3:
+        idx = sorted(known_poses)
+    starts = list(range(0, max(1, len(idx) - overlap), max(1, chunk - overlap)))
+    clouds, centers, fits = [], [], []
+    peak = 0.0
+    for c, s in enumerate(starts):
+        sel = idx[s : s + chunk]
+        if len(sel) < 3:
+            continue
+        paths = [image_paths[i] for i in sel]
+        poses = {k: known_poses[i] for k, i in enumerate(sel)}
+        cache = (cache_dir / f"chunk_{c:03d}.npz") if cache_dir else None
+        out = run_vggt(paths, cache)
+        peak = max(peak, out["peak_vram_gb"])
+        scale, rotation, translation, fit = align_cameras(out["extrinsic"], poses)
+        keep = out["conf"] >= np.percentile(out["conf"], conf_percentile)
+        pts = apply_similarity(out["points"][keep], scale, rotation, translation)
+        clouds.append(pts.astype(np.float64))
+        centers.append(apply_similarity(camera_centers_from_extrinsics(out["extrinsic"]), scale, rotation, translation))
+        fits.append(fit)
+    if not clouds:
+        raise ValueError("no chunk could be reconstructed")
+    cloud = o3d.geometry.PointCloud()
+    cloud.points = o3d.utility.Vector3dVector(np.concatenate(clouds))
+    info = {
+        "images": len(idx),
+        "chunks": len(fits),
+        "chunk_size": chunk,
+        "peak_vram_gb": round(peak, 2),
+        "points": int(sum(len(c) for c in clouds)),
+        "scale": round(float(np.median([f["scale"] for f in fits])), 4),
+        "camera_residual_cm_median": round(float(np.median([f["camera_residual_cm_median"] for f in fits])), 1),
+        "rotation_residual_deg_median": round(float(np.median([f["rotation_residual_deg_median"] for f in fits])), 1),
+        "worst_chunk_rotation_deg": round(float(max(f["rotation_residual_deg_median"] for f in fits)), 1),
+    }
+    return cloud, np.concatenate(centers), info
