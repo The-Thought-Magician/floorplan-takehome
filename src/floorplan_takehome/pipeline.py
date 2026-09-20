@@ -383,3 +383,67 @@ def process_stray_scan(scan_dir: Path, out_dir: Path, run_image_tiers: bool = Tr
     summary["timing"] = timing
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
     return summary
+
+
+def run_damage_for_capture(capture_dir: Path, plan: dict, backend: str | None = None) -> dict | None:
+    """Damage regions on the photos of a web capture (poses and depth per photo)."""
+    from floorplan_takehome.damage import run_damage
+    from floorplan_takehome.depth_capture import _depth_grid
+
+    capture_dir = Path(capture_dir)
+    data = json.loads((capture_dir / "capture.json").read_text())
+    photo_poses, depth_views = {}, {}
+    for record in data.get("captures", []):
+        photo = record.get("photo")
+        if not photo or not (capture_dir / photo).exists():
+            continue
+        view = record["views"][0]
+        path = str(capture_dir / photo)
+        photo_poses[path] = (np.array(view["projection_matrix"]).reshape(4, 4, order="F"), np.array(view["transform_matrix"]).reshape(4, 4, order="F"))
+        depth_views[path] = view
+    if not photo_poses:
+        return None
+
+    def depth_lookup(path, u, v):
+        grid = _depth_grid(depth_views[path])
+        if grid is None:
+            return None
+        h, w = grid.shape
+        d = grid[min(int(v * h), h - 1), min(int(u * w), w - 1)]
+        return None if not np.isfinite(d) else float(d)
+
+    g = plan.get("diagnostics") or {}
+    result = run_damage(sorted(photo_poses), photo_poses, plan["rooms"], g.get("floor_y"), g.get("ceiling_y"), depth_lookup, backend)
+    (capture_dir / "damage.json").write_text(json.dumps(result, indent=2))
+    plan["damage"] = {k: v for k, v in result.items() if k != "raw_detections"}
+    (capture_dir / "plan.json").write_text(json.dumps(plan, indent=2, default=str))
+    return result
+
+
+def run_damage_for_stray(scan_dir: Path, out_dir: Path, plan: dict, every: int = 60, backend: str | None = None) -> dict | None:
+    """Damage regions on upright video frames of a Stray Scanner scan (poses per frame)."""
+    from floorplan_takehome import stray_scanner as ss
+    from floorplan_takehome.damage import run_damage
+    from floorplan_takehome.multiview import horizontal_frames
+
+    scan_dir, out_dir = Path(scan_dir), Path(out_dir)
+    paths, known = ss.video_frames_with_poses(scan_dir, out_dir / "frames_damage", every=every)
+    keep = horizontal_frames(known)
+    if not keep:
+        return None
+    K = ss.load_intrinsics(scan_dir)
+    import cv2
+
+    img = cv2.imread(paths[keep[0]])
+    h, w = img.shape[:2]
+    # frames were rotated upright: the long sensor axis is now vertical. Focal lengths in
+    # normalized device units for the rotated frame.
+    f_px = K[0, 0] * (h / max(K[0, 2] * 2, 1))  # scale RGB intrinsics to the frame's long side
+    proj = np.diag([2 * f_px / w, 2 * f_px / h, 1.0, 1.0])
+    photo_poses = {paths[i]: (proj, known[i]) for i in keep}
+    g = plan.get("diagnostics") or {}
+    result = run_damage(sorted(photo_poses), photo_poses, plan["rooms"], g.get("floor_y"), g.get("ceiling_y"), None, backend)
+    (out_dir / "damage.json").write_text(json.dumps(result, indent=2))
+    plan["damage"] = {k: v for k, v in result.items() if k != "raw_detections"}
+    (out_dir / "plan.json").write_text(json.dumps(plan, indent=2, default=str))
+    return result
