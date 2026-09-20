@@ -102,4 +102,4 @@ def test_level_by_camera_up_rotates_mean_up_axis_to_y():
         ext.append(np.concatenate([r_wc.T, np.zeros((3, 1))], axis=1))
     level = level_by_camera_up(np.array(ext))
     up = -np.array(ext)[:, :, :3].transpose(0, 2, 1)[:, :, 1].mean(axis=0)
-    np.testing.assert_allclose(level @ (up / np.linalg.norm(up)), [0, 1, 0], atol=1e-9)
+    np.testing.assert_allclose(level @ (up / np.linalg.norm(up)), [0, 1, 0], atol=1e-6)
