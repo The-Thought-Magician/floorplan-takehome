@@ -1,8 +1,7 @@
 import json
 
-import pytest
-
 import numpy as np
+import pytest
 
 from floorplan_takehome.depth_capture import _unproject_grid, load_point_cloud
 

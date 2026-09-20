@@ -1,6 +1,11 @@
 import numpy as np
 
-from floorplan_takehome.damage import _merge_overlaps, flag_concealed, localize, scope_items
+from floorplan_takehome.damage import (
+    _merge_overlaps,
+    flag_concealed,
+    localize,
+    scope_items,
+)
 
 
 def _camera(position, yaw_deg=0.0):

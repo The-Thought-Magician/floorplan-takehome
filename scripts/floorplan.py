@@ -12,7 +12,12 @@ import sys
 from pathlib import Path
 
 from floorplan_takehome import pipeline, stray_scanner
-from floorplan_takehome.pipeline import process_capture_dir, process_image_tiers, process_stray_scan, run_damage_for_capture
+from floorplan_takehome.pipeline import (
+    process_capture_dir,
+    process_image_tiers,
+    process_stray_scan,
+    run_damage_for_capture,
+)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
